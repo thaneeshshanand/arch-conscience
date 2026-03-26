@@ -11,7 +11,15 @@ Start with:
 import hashlib
 import hmac
 import logging
+import sys
 from contextlib import asynccontextmanager
+
+# ── Logging setup (stdout for Railway) ───────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+)
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
