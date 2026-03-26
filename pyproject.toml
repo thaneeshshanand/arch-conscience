@@ -18,6 +18,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "qdrant-client>=1.11.0",
     "litellm==1.82.6",  # pinned — 1.82.7/1.82.8 compromised (supply chain attack)
+    "mcp[cli]>=1.2.0",
 ]
 
 [project.optional-dependencies]
