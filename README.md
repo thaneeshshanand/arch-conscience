@@ -8,9 +8,9 @@
 
 Engineering teams make architectural decisions for good reasons. They write them down in ADRs, Confluence pages, and Jira epics. Then six months later, a new engineer opens a PR that reintroduces the exact approach the team explicitly rejected — because they never knew the decision existed.
 
-Existing tools like ArchGuard, Eraserbot, and DocAider solve the *diagram* problem — keeping architecture visuals in sync with code. None of them solve the *intent* problem: detecting when a code change violates a past decision and the reasoning behind it.
+Most architecture tooling focuses on visualisation, linting, or dependency tracking. None of them solve the *intent* problem: detecting when a code change violates a past decision and the reasoning behind it.
 
-arch-conscience is different. It doesn't generate diagrams. It doesn't lint code. It does one thing: watch for PRs that break architectural promises and tell the right engineer why, before the code merges.
+arch-conscience doesn't generate diagrams or lint code. It does one thing: watch for PRs that break architectural promises and tell the right engineer why, before the code merges.
 
 ---
 
@@ -46,14 +46,11 @@ When retrieval returns no relevant decisions for a changed service, the event is
 
 ## What makes it different
 
-|  | arch-conscience | ArchGuard | Eraserbot / Kloudfarm |
-| --- | --- | --- | --- |
-| Detects intent violations | ✅ | ❌ | ❌ |
-| Reasons over rejected alternatives | ✅ | ❌ | ❌ |
-| Always-on proactive alerts | ✅ | ❌ | ❌ |
-| Works with existing chat apps | ✅ | ❌ | ❌ |
-| Corpus gap / self-healing signal | ✅ | ❌ | ❌ |
-| Diagram generation | ❌ | ✅ | ✅ |
+- **Detects intent violations** — not just structural drift, but contradictions against documented reasoning
+- **Reasons over rejected alternatives** — catches when a PR reintroduces an approach the team explicitly ruled out
+- **Always-on proactive alerts** — engineers hear about the problem before the code merges, not after
+- **Corpus gap signals** — the system knows what it *doesn't* know, and logs blind spots for future ADR authoring
+- **Section-level retrieval** — surfaces the exact ADR section (Context, Decision, Consequences, Rejected Alternatives) most relevant to the change
 
 ---
 
