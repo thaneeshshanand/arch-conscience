@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+gap.log
+qdrant_storage/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
