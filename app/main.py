@@ -52,7 +52,8 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="arch-conscience", lifespan=lifespan)
 
 # Mount MCP server at /mcp — agents connect via streamable HTTP
-app.mount("/mcp", mcp_server.streamable_http_app())
+mcp_app = mcp_server.streamable_http_app()
+app.mount("/mcp", mcp_app)
 
 
 @app.post("/")

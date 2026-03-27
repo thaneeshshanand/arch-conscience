@@ -38,6 +38,7 @@ mcp = FastMCP(
     name="arch-conscience",
     stateless_http=True,
     json_response=True,
+    streamable_http_path="/",
     instructions=(
         "You have access to this project's architectural decision records (ADRs). "
         "Before generating or modifying code, call get_architectural_context with "
