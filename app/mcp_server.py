@@ -206,10 +206,14 @@ async def get_architectural_context(
 @mcp.tool()
 async def draft_adr(
     title: str,
-    services: str,
-    context: str,
+    services: str = "",
+    service: str = "",
+    context: str = "",
     approach: str = "",
     alternatives_considered: str = "",
+    alternatives: str = "",
+    decision: str = "",
+    consequences: str = "",
     constraint_type: str = "operational",
     author: str = "unknown",
     adr_id: str = "",
@@ -230,19 +234,36 @@ async def draft_adr(
         title: Short decision title (e.g. "Use PostgreSQL for payment ledger").
         services: Comma-separated service names affected by this decision
                   (e.g. "payments-service, billing-service").
+        service: Alternative to services — single service name.
         context: Why this decision is needed — the problem, requirements,
                  and constraints driving it. Be detailed.
-        approach: The decided approach. If empty, the LLM will infer
-                  from context or mark as TODO.
+        approach: The decided approach, if known.
         alternatives_considered: What other options were evaluated and why
                                  they were rejected. Free-form text.
+        alternatives: Alternative to alternatives_considered.
+        decision: The decided approach (alternative to approach).
+        consequences: Known consequences and tradeoffs of the decision.
         constraint_type: One of: security, compliance, performance,
                          scalability, data_model, operational.
         author: Who is authoring this decision.
         adr_id: ADR identifier (e.g. "adr-005"). Auto-generated if empty.
     """
     settings = get_settings()
-    service_list = [s.strip() for s in services.split(",") if s.strip()]
+
+    # Accept both singular and plural, merge
+    services_str = services or service
+    service_list = [s.strip() for s in services_str.split(",") if s.strip()]
+
+    # Accept both approach and decision
+    decided_approach = approach or decision
+
+    # Accept both alternatives_considered and alternatives
+    alts = alternatives_considered or alternatives
+
+    # Merge consequences into context if provided
+    full_context = context
+    if consequences:
+        full_context += f"\n\nKnown consequences and tradeoffs: {consequences}"
 
     # Gather related existing decisions using the same corpus query
     # that get_architectural_context uses
@@ -267,9 +288,9 @@ async def draft_adr(
     adr_markdown = await _draft_adr(
         title=title,
         services=service_list,
-        context=context,
-        approach=approach,
-        alternatives_considered=alternatives_considered,
+        context=full_context,
+        approach=decided_approach,
+        alternatives_considered=alts,
         related_decisions=related_decisions,
         constraint_type=constraint_type,
         author=author,
