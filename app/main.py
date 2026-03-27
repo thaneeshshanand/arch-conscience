@@ -27,6 +27,7 @@ from app.config import get_settings
 from app.corpus import ensure_collection, query
 from app.detect import run_detection
 from app.gap_log import create_gap_entry, log_gap
+from app.mcp_server import mcp as mcp_server
 from app.notify import dispatch
 from app.router import build_payload
 
@@ -37,15 +38,21 @@ _SUPPORTED_ACTIONS = {"opened", "synchronize", "closed"}
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """Startup: validate config and ensure Qdrant collection exists."""
+    """Startup: validate config, ensure Qdrant collection, start MCP session manager."""
     settings = get_settings()
     settings.validate_required()
     await ensure_collection(settings)
     logger.info("arch-conscience ready on port %d", settings.WEBHOOK_PORT)
-    yield
+
+    # Start MCP session manager for streamable HTTP transport
+    async with mcp_server.session_manager.run():
+        yield
 
 
 app = FastAPI(title="arch-conscience", lifespan=lifespan)
+
+# Mount MCP server at /mcp — agents connect via streamable HTTP
+app.mount("/mcp", mcp_server.streamable_http_app())
 
 
 @app.post("/")
