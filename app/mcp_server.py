@@ -30,6 +30,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app.config import get_settings
 from app.corpus import ensure_collection, query, stats
+from app.adr_drafter import draft_adr as _draft_adr
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,10 @@ mcp = FastMCP(
         "Before generating or modifying code, call get_architectural_context with "
         "the affected service name and/or your proposed approach. This ensures your "
         "code complies with documented decisions and avoids reintroducing patterns "
-        "the team has explicitly rejected."
+        "the team has explicitly rejected. "
+        "When an engineer makes a significant architectural decision — choosing a "
+        "database, defining an API pattern, selecting an auth mechanism — call "
+        "draft_adr to generate a structured ADR for team review."
     ),
 )
 
@@ -197,6 +201,95 @@ async def get_architectural_context(
     }
 
     return json.dumps(response, indent=2)
+
+
+@mcp.tool()
+async def draft_adr(
+    title: str,
+    services: str,
+    context: str,
+    approach: str = "",
+    alternatives_considered: str = "",
+    constraint_type: str = "operational",
+    author: str = "unknown",
+    adr_id: str = "",
+) -> str:
+    """Draft a structured Architecture Decision Record for team review.
+
+    Call this when a significant architectural decision is being made —
+    choosing a database, defining an API pattern, selecting an auth
+    mechanism, establishing a service boundary, etc. The generated ADR
+    follows the project's standard format with Context, Decision,
+    Consequences, and Rejected Alternatives sections.
+
+    The more context you provide, the better the draft. Include the
+    problem being solved, constraints (scale, compliance, team expertise,
+    cost), and any alternatives that were discussed.
+
+    Args:
+        title: Short decision title (e.g. "Use PostgreSQL for payment ledger").
+        services: Comma-separated service names affected by this decision
+                  (e.g. "payments-service, billing-service").
+        context: Why this decision is needed — the problem, requirements,
+                 and constraints driving it. Be detailed.
+        approach: The decided approach. If empty, the LLM will infer
+                  from context or mark as TODO.
+        alternatives_considered: What other options were evaluated and why
+                                 they were rejected. Free-form text.
+        constraint_type: One of: security, compliance, performance,
+                         scalability, data_model, operational.
+        author: Who is authoring this decision.
+        adr_id: ADR identifier (e.g. "adr-005"). Auto-generated if empty.
+    """
+    settings = get_settings()
+    service_list = [s.strip() for s in services.split(",") if s.strip()]
+
+    # Gather related existing decisions using the same corpus query
+    # that get_architectural_context uses
+    await ensure_collection(settings)
+    related_decisions = ""
+    for svc in service_list:
+        chunks = await query(
+            text=f"Architectural decisions for {svc}",
+            services=[svc],
+            top_k=4,
+            status_filter="active",
+            settings=settings,
+        )
+        if chunks:
+            related_decisions += f"\nExisting decisions for {svc}:\n"
+            for sc in chunks:
+                related_decisions += (
+                    f"- [{sc.chunk.doc_id}] {sc.chunk.section_type}: "
+                    f"{sc.chunk.text[:200]}\n"
+                )
+
+    adr_markdown = await _draft_adr(
+        title=title,
+        services=service_list,
+        context=context,
+        approach=approach,
+        alternatives_considered=alternatives_considered,
+        related_decisions=related_decisions,
+        constraint_type=constraint_type,
+        author=author,
+        adr_id=adr_id,
+        settings=settings,
+    )
+
+    return json.dumps({
+        "adr_id": adr_id or "auto-generated",
+        "title": title,
+        "services": service_list,
+        "status": "proposed",
+        "draft": adr_markdown,
+        "next_steps": (
+            "Review this draft with your team. Edit as needed, then save it "
+            "to the /adrs directory and run 'python -m scripts.run_ingest' "
+            "to add it to the corpus. Once ingested, arch-conscience will "
+            "enforce this decision on future PRs and code generation."
+        ),
+    }, indent=2)
 
 
 @mcp.resource("arch-conscience://status")
