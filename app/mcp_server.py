@@ -23,10 +23,12 @@ Configure in Claude Desktop / Cursor / Claude Code:
 
 import json
 import logging
+import os
 import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import get_settings
 from app.corpus import ensure_collection, query, stats
@@ -39,6 +41,9 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
     streamable_http_path="/",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
     instructions=(
         "You have access to this project's architectural decision records (ADRs). "
         "Before generating or modifying code, call get_architectural_context with "
