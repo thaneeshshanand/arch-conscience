@@ -33,6 +33,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.config import get_settings
 from app.corpus import ensure_collection, query, stats
 from app.adr_drafter import draft_adr as _draft_adr
+from app.rules_bridge import extract_decisions_from_rules
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,79 @@ async def draft_adr(
             "to the /adrs directory and run 'python -m scripts.run_ingest' "
             "to add it to the corpus. Once ingested, arch-conscience will "
             "enforce this decision on future PRs and code generation."
+        ),
+    }, indent=2)
+
+
+@mcp.tool()
+async def ingest_rules_file(
+    content: str,
+    filename: str = "rules.md",
+) -> str:
+    """Extract architectural decisions from a rules file and add them to the corpus.
+
+    Call this when a team has an existing CLAUDE.md, .cursorrules, AGENTS.md,
+    rules.md, or similar file containing architectural rules mixed with
+    code style and setup instructions. This tool extracts only the
+    architectural decisions and indexes them for enforcement.
+
+    The tool uses an LLM to distinguish architectural decisions
+    (database choices, auth patterns, service communication rules) from
+    code style rules (indentation, naming conventions) and setup
+    commands. Only architectural decisions are added to the corpus.
+
+    Args:
+        content: The full text content of the rules file.
+        filename: Name of the file for provenance tracking
+                  (e.g. "CLAUDE.md", ".cursorrules").
+    """
+    settings = get_settings()
+    await ensure_collection(settings)
+
+    from app.corpus import upsert
+
+    chunks = await extract_decisions_from_rules(
+        content=content,
+        source_file=filename,
+        settings=settings,
+    )
+
+    if not chunks:
+        return json.dumps({
+            "filename": filename,
+            "decisions_extracted": 0,
+            "chunks_indexed": 0,
+            "message": (
+                "No architectural decisions found in this file. "
+                "The file may contain only code style rules, commands, "
+                "or setup instructions."
+            ),
+        }, indent=2)
+
+    await upsert(chunks, settings)
+
+    # Summarize what was extracted
+    decisions = {}
+    for c in chunks:
+        if c.doc_id not in decisions:
+            decisions[c.doc_id] = {
+                "title": c.text.split("\n")[0].replace("Rule: ", ""),
+                "sections": [],
+                "services": c.affected_services,
+                "constraint_type": c.constraint_type,
+            }
+        decisions[c.doc_id]["sections"].append(c.section_type)
+
+    return json.dumps({
+        "filename": filename,
+        "decisions_extracted": len(decisions),
+        "chunks_indexed": len(chunks),
+        "decisions": list(decisions.values()),
+        "message": (
+            f"Extracted {len(decisions)} architectural decisions from {filename} "
+            f"and indexed {len(chunks)} chunks into the corpus. These decisions "
+            "are now active and will be enforced on future code generation "
+            "and PR reviews."
         ),
     }, indent=2)
 

@@ -14,8 +14,10 @@ from qdrant_client.http.models import (
     Distance,
     FieldCondition,
     Filter,
+    IsEmptyCondition,
     MatchAny,
     MatchValue,
+    PayloadField,
     PayloadSchemaType,
     PointStruct,
     SparseVectorParams,
@@ -233,15 +235,25 @@ async def query(
     ]
 
     if services:
-        must_clauses.append(
-            FieldCondition(key="affected_services", match=MatchAny(any=services)),
+        # Return chunks that match the specific services OR are
+        # project-wide (empty affected_services). This ensures that
+        # decisions from rules files, Confluence, and Jira that apply
+        # to all services are always included in service-specific queries.
+        query_filter = Filter(
+            must=must_clauses,
+            should=[
+                FieldCondition(key="affected_services", match=MatchAny(any=services)),
+                IsEmptyCondition(is_empty=PayloadField(key="affected_services")),
+            ],
         )
+    else:
+        query_filter = Filter(must=must_clauses)
 
     response = await client.query_points(
         collection_name=s.QDRANT_COLLECTION,
         query=vector,
         limit=top_k,
-        query_filter=Filter(must=must_clauses),
+        query_filter=query_filter,
         with_payload=True,
         score_threshold=_SCORE_THRESHOLD,
     )
