@@ -46,7 +46,7 @@ For each architectural decision you find, extract:
 - decision: What was decided
 - context: Why it was decided (if stated or inferable)
 - rejected: What was rejected or prohibited (if stated or inferable)
-- services: Which services this applies to (use "all" if project-wide)
+- services: Which services this applies to (use an empty array [] if project-wide)
 - constraint_type: One of: security, compliance, performance, scalability, data_model, operational
 
 Also extract tribal knowledge that represents implicit architectural decisions:
@@ -134,6 +134,8 @@ async def extract_decisions_from_rules(
 
         if isinstance(services, str):
             services = [services]
+        # Filter out "all" placeholder - empty list means project-wide
+        services = [s for s in services if s and s.lower() != "all"]
 
         doc_id = f"rules-{source_stem}-{i + 1}"
 
