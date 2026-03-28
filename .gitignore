@@ -8,3 +8,4 @@ qdrant_storage/
 *.egg-info/
 dist/
 build/
+HANDOFF.md
