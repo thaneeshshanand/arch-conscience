@@ -1,7 +1,7 @@
-"""MCP server tests — verifies get_architectural_context behavior.
+"""MCP server tests — verifies get_architectural_context and draft_adr.
 
-Tests all four input combinations and conflict analysis logic.
-Mocks the corpus layer so no Qdrant or LLM calls are needed.
+Tests all input combinations, conflict analysis logic, and ADR drafting.
+Mocks the corpus and LLM layers so no external calls are needed.
 
 Run with:
     pytest tests/test_mcp.py -v
@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.corpus import ChunkRecord, ScoredChunk
+from app.llm.base import CompletionResult
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -279,3 +280,139 @@ class TestConflictAnalysis:
         result = _analyze_conflicts([context_chunk])
         assert result["verdict"] == "context_available"
         assert result["conflicts_found"] == 0
+
+
+class TestDraftAdr:
+    """Tests for the draft_adr MCP tool."""
+
+    @pytest.fixture
+    def mock_adr_markdown(self):
+        return (
+            "---\n"
+            "id: adr-20260327\n"
+            "title: Use event sourcing for payment state\n"
+            "status: proposed\n"
+            "date: 2026-03-27\n"
+            "services: [payments-service]\n"
+            "constraint_type: compliance\n"
+            "author: thaneesh\n"
+            "---\n\n"
+            "## Context\n\nThe payments service needs audit compliance.\n\n"
+            "## Decision\n\nUse event sourcing with append-only store.\n\n"
+            "## Consequences\n\nFull audit trail. Increased read complexity.\n\n"
+            "## Rejected Alternatives\n\nCRUD with audit log table rejected."
+        )
+
+    @pytest.mark.asyncio
+    async def test_draft_adr_basic(self, test_settings, mock_adr_markdown):
+        """draft_adr returns a structured ADR with next_steps."""
+        from app.mcp_server import draft_adr
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
+             patch("app.adr_drafter.complete", new_callable=AsyncMock,
+                   return_value=CompletionResult(content=mock_adr_markdown, model="gpt-4o")):
+
+            result = json.loads(await draft_adr(
+                title="Use event sourcing for payment state",
+                services="payments-service",
+                context="Need audit compliance for 50k transactions/day.",
+                constraint_type="compliance",
+                author="thaneesh",
+            ))
+
+        assert result["title"] == "Use event sourcing for payment state"
+        assert result["services"] == ["payments-service"]
+        assert result["status"] == "proposed"
+        assert "## Context" in result["draft"]
+        assert "## Rejected Alternatives" in result["draft"]
+        assert "next_steps" in result
+
+    @pytest.mark.asyncio
+    async def test_draft_adr_accepts_singular_service(self, test_settings, mock_adr_markdown):
+        """draft_adr accepts 'service' (singular) as an alternative to 'services'."""
+        from app.mcp_server import draft_adr
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
+             patch("app.adr_drafter.complete", new_callable=AsyncMock,
+                   return_value=CompletionResult(content=mock_adr_markdown, model="gpt-4o")):
+
+            result = json.loads(await draft_adr(
+                title="Use event sourcing",
+                service="payments-service",
+                context="Audit compliance needed.",
+            ))
+
+        assert result["services"] == ["payments-service"]
+
+    @pytest.mark.asyncio
+    async def test_draft_adr_accepts_decision_param(self, test_settings, mock_adr_markdown):
+        """draft_adr accepts 'decision' as an alternative to 'approach'."""
+        from app.mcp_server import draft_adr
+
+        mock_drafter = AsyncMock(return_value=CompletionResult(content=mock_adr_markdown, model="gpt-4o"))
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
+             patch("app.adr_drafter.complete", mock_drafter):
+
+            await draft_adr(
+                title="Use event sourcing",
+                services="payments-service",
+                context="Audit compliance.",
+                decision="Append-only event store",
+            )
+
+        # Verify the decision was passed through to the drafter
+        call_args = mock_drafter.call_args
+        user_msg = call_args[0][0][1].content
+        assert "Append-only event store" in user_msg
+
+    @pytest.mark.asyncio
+    async def test_draft_adr_accepts_alternatives_param(self, test_settings, mock_adr_markdown):
+        """draft_adr accepts 'alternatives' as alternative to 'alternatives_considered'."""
+        from app.mcp_server import draft_adr
+
+        mock_drafter = AsyncMock(return_value=CompletionResult(content=mock_adr_markdown, model="gpt-4o"))
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
+             patch("app.adr_drafter.complete", mock_drafter):
+
+            await draft_adr(
+                title="Use event sourcing",
+                services="payments-service",
+                context="Audit compliance.",
+                alternatives="CRUD with audit log rejected due to incomplete history.",
+            )
+
+        call_args = mock_drafter.call_args
+        user_msg = call_args[0][0][1].content
+        assert "CRUD with audit log" in user_msg
+
+    @pytest.mark.asyncio
+    async def test_draft_adr_includes_related_decisions(self, test_settings, adr001_chunks, mock_adr_markdown):
+        """draft_adr queries corpus for related decisions and passes them to drafter."""
+        from app.mcp_server import draft_adr
+
+        mock_drafter = AsyncMock(return_value=CompletionResult(content=mock_adr_markdown, model="gpt-4o"))
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=adr001_chunks), \
+             patch("app.adr_drafter.complete", mock_drafter):
+
+            await draft_adr(
+                title="Add OAuth to auth-service",
+                services="auth-service",
+                context="Need third-party login support.",
+            )
+
+        call_args = mock_drafter.call_args
+        user_msg = call_args[0][0][1].content
+        assert "adr-001" in user_msg
