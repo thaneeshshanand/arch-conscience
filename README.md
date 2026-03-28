@@ -22,6 +22,8 @@ arch-conscience closes that gap.
 
 **Drafts new ADRs from conversation.** When an engineer makes a significant architectural decision, the agent generates a structured ADR with Context, Decision, Consequences, and Rejected Alternatives sections, informed by existing decisions in the corpus.
 
+**Ingests your existing rules files.** Already have a CLAUDE.md, .cursorrules, or AGENTS.md? arch-conscience extracts the architectural decisions from it using an LLM (ignoring code style, commands, and setup instructions), indexes them into the corpus, and starts enforcing them. No need to rewrite anything in ADR format.
+
 **Knows what it doesn't know.** When a PR touches a service with no documented decisions, the system logs a corpus gap signal, surfacing blind spots in your architectural knowledge base.
 
 ---
@@ -149,6 +151,19 @@ draft_adr(
 
 Returns a complete ADR in markdown with frontmatter, ready for team review.
 
+### `ingest_rules_file`
+
+Extracts architectural decisions from an existing AI coding rules file and adds them to the corpus.
+
+```python
+ingest_rules_file(
+    content="<contents of your CLAUDE.md or .cursorrules>",
+    filename="CLAUDE.md",
+)
+```
+
+Uses an LLM to distinguish architectural decisions (database choices, auth patterns, service communication rules) from code style, commands, and setup instructions. Only architectural decisions are indexed. Supports CLAUDE.md, .cursorrules, AGENTS.md, rules.md, implementation.md, and similar formats.
+
 ---
 
 ## What makes it different
@@ -159,6 +174,7 @@ Returns a complete ADR in markdown with frontmatter, ready for team review.
 - **Two-stage detection pipeline.** Cheap model filters for relevance, expensive model reasons about contradictions. Keeps costs low and false positives down.
 - **Corpus gap signals.** The system knows what it doesn't know, logging blind spots where services have no documented decisions.
 - **ADR drafting.** Generates structured ADRs from conversation, informed by existing decisions in the corpus.
+- **Rules file bridge.** Ingests CLAUDE.md, .cursorrules, AGENTS.md, and similar files. Extracts only the architectural decisions using an LLM, turning a bloated static rules file into a queryable, enforceable knowledge base.
 
 ---
 
@@ -238,7 +254,21 @@ Valid `constraint_type` values: `security`, `compliance`, `performance`, `scalab
 python -m scripts.run_ingest
 ```
 
-### 6. Connect your coding agent
+### 6. Ingest existing rules files (optional)
+
+If your project already has a CLAUDE.md, .cursorrules, AGENTS.md, or similar file, you can extract the architectural decisions from it:
+
+```bash
+# Ingest a specific file
+python -m scripts.ingest_rules --file path/to/CLAUDE.md
+
+# Auto-discover rules files in a project directory
+python -m scripts.ingest_rules --project /path/to/your/project
+```
+
+This uses an LLM to separate architectural decisions from code style and setup instructions. Only the architectural decisions are added to the corpus.
+
+### 7. Connect your coding agent
 
 **Claude Code (remote, uses the deployed server):**
 ```bash
@@ -250,13 +280,13 @@ claude mcp add --transport http arch-conscience https://your-railway-url.up.rail
 claude mcp add-json arch-conscience '{"command":"/path/to/arch-conscience/.venv/bin/python","args":["-m","app.mcp_server"],"cwd":"/path/to/arch-conscience"}'
 ```
 
-### 7. Start the webhook server
+### 8. Start the webhook server
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 3456
 ```
 
-### 8. Register the GitHub webhook
+### 9. Register the GitHub webhook
 
 In your repo: **Settings > Webhooks > Add webhook**
 
@@ -276,9 +306,10 @@ Active:        ✅
 # Config and validation tests
 pytest tests/test_smoke.py -v
 
-# Full pipeline + webhook + MCP tests
+# Full pipeline + webhook + MCP + rules bridge tests
 pytest tests/test_e2e.py -v
 pytest tests/test_mcp.py -v
+pytest tests/test_rules_bridge.py -v
 ```
 
 ### Manual simulation
@@ -333,15 +364,18 @@ arch-conscience/
 │   ├── ingest.py            ADR / Confluence / Jira ingestion
 │   ├── gap_log.py           Corpus gap signal logger (JSONL)
 │   ├── adr_drafter.py       LLM-powered ADR draft generator
-│   ├── mcp_server.py        MCP server (get_architectural_context, draft_adr)
+│   ├── rules_bridge.py      Extract decisions from CLAUDE.md/.cursorrules/AGENTS.md
+│   ├── mcp_server.py        MCP server (get_architectural_context, draft_adr, ingest_rules_file)
 │   └── main.py              FastAPI server (webhook + MCP mount)
 ├── scripts/
 │   ├── run_ingest.py        CLI: ingest ADRs into Qdrant
-│   └── simulate_pr.py       CLI: simulate a PR through the pipeline
+│   ├── simulate_pr.py       CLI: simulate a PR through the pipeline
+│   └── ingest_rules.py      CLI: extract decisions from rules files
 ├── tests/
 │   ├── test_smoke.py        Config + Qdrant connection tests
 │   ├── test_e2e.py          Full pipeline + webhook tests
-│   └── test_mcp.py          MCP tool tests
+│   ├── test_mcp.py          MCP tool tests
+│   └── test_rules_bridge.py Rules file extraction + ingestion tests
 ├── pyproject.toml
 ├── requirements.txt
 ├── Procfile                 Railway deployment
@@ -370,6 +404,9 @@ LiteLLM handles provider routing, response normalization, and retries without hi
 ### Why the false positive guard
 Alert fatigue kills adoption faster than missed detections. Additive changes are never flagged. Only genuine contradictions fire alerts.
 
+### Why LLM-based rules file extraction
+Most teams already have rules files (CLAUDE.md, .cursorrules, AGENTS.md) full of architectural constraints mixed with code style. Rather than asking teams to rewrite everything as ADRs, the rules bridge uses an LLM to separate architectural decisions from style rules and indexes only what matters. This lowers the adoption barrier from "write ADRs in our format" to "point us at what you already have."
+
 ---
 
 ## Confluence and Jira ingestion
@@ -395,6 +432,8 @@ JIRA_TOKEN=your_atlassian_api_token
 - Post-merge conformance scanning: detect gradual architectural drift
 - Decision lifecycle: detect when ADRs are being consistently violated and suggest superseding them
 - Multi-source context for ADR drafting: gather context from Jira, Slack, PR discussions, and codebase analysis
+- Format-agnostic ingestion: LLM normalization for Confluence pages, Notion docs, and free-form design documents
+- Notion integration: ingest architectural decisions from Notion workspaces
 
 ---
 
