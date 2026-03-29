@@ -67,11 +67,10 @@ def adr001_chunks():
         source_type="ADR",
         doc_id="adr-001",
         affected_services=["auth-service", "api-gateway"],
-        decision_date="2024-03-15",
+        date="2024-03-15",
         status="active",
-        constraint_type="security",
+        domain="security",
         author="thaneesh",
-        linked_adr_ids=[],
     )
 
     return [

@@ -9,3 +9,4 @@ qdrant_storage/
 dist/
 build/
 HANDOFF.md
+projectdocs/

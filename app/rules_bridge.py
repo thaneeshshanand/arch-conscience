@@ -47,7 +47,7 @@ For each architectural decision you find, extract:
 - context: Why it was decided (if stated or inferable)
 - rejected: What was rejected or prohibited (if stated or inferable)
 - services: Which services this applies to (use an empty array [] if project-wide)
-- constraint_type: One of: security, compliance, performance, scalability, data_model, operational
+- domain: One of: security, compliance, performance, scalability, data_model, operational
 
 Also extract tribal knowledge that represents implicit architectural decisions:
 - "The payments module uses a legacy REST client, don't refactor it yet" is an implicit decision
@@ -62,7 +62,7 @@ Return ONLY a JSON object with a "decisions" key containing an array. No prose, 
       "context": "string or empty",
       "rejected": "string or empty",
       "services": ["string"],
-      "constraint_type": "string"
+      "domain": "string"
     }
   ]
 }
@@ -130,7 +130,8 @@ async def extract_decisions_from_rules(
         context_text = d.get("context", "")
         rejected_text = d.get("rejected", "")
         services = d.get("services", ["all"])
-        constraint_type = d.get("constraint_type", "operational")
+        # Accept both "domain" (new) and "constraint_type" (old) from LLM output
+        domain = d.get("domain", d.get("constraint_type", "operational"))
 
         if isinstance(services, str):
             services = [services]
@@ -150,13 +151,15 @@ async def extract_decisions_from_rules(
             ChunkRecord(
                 id=f"{doc_id}-decision",
                 text="\n".join(decision_parts),
+                knowledge_type="decision",
                 source_type="rules_file",
                 doc_id=doc_id,
                 section_type="decision",
                 affected_services=services,
                 status="active",
-                constraint_type=constraint_type,
+                domain=domain,
                 author=source_file,
+                source_title=title,
             )
         )
 
@@ -171,13 +174,15 @@ async def extract_decisions_from_rules(
                 ChunkRecord(
                     id=f"{doc_id}-rejected_alternatives",
                     text=rejected_chunk_text,
+                    knowledge_type="decision",
                     source_type="rules_file",
                     doc_id=doc_id,
                     section_type="rejected_alternatives",
                     affected_services=services,
                     status="active",
-                    constraint_type=constraint_type,
+                    domain=domain,
                     author=source_file,
+                    source_title=title,
                 )
             )
 

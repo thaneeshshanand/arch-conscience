@@ -63,8 +63,9 @@ def _format_chunk(chunk, score: float) -> dict[str, Any]:
     return {
         "adr_id": chunk.doc_id,
         "section": chunk.section_type,
+        "knowledge_type": chunk.knowledge_type,
         "services": chunk.affected_services,
-        "constraint_type": chunk.constraint_type,
+        "domain": chunk.domain,
         "status": chunk.status,
         "relevance_score": round(score, 3),
         "text": chunk.text,
@@ -377,7 +378,7 @@ async def ingest_rules_file(
                 "title": c.text.split("\n")[0].replace("Rule: ", ""),
                 "sections": [],
                 "services": c.affected_services,
-                "constraint_type": c.constraint_type,
+                "domain": c.domain,
             }
         decisions[c.doc_id]["sections"].append(c.section_type)
 

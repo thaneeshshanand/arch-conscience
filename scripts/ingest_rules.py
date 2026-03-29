@@ -68,7 +68,7 @@ async def main():
     for c in chunks:
         if c.section_type == "decision":
             title = c.text.split("\n")[0].replace("Rule: ", "")
-            print(f"  - {title} [{c.constraint_type}] -> {', '.join(c.affected_services)}")
+            print(f"  - {title} [{c.domain}] -> {', '.join(c.affected_services)}")
 
 
 if __name__ == "__main__":

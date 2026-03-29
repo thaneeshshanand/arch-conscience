@@ -26,11 +26,10 @@ def adr001_chunks():
         source_type="ADR",
         doc_id="adr-001",
         affected_services=["auth-service", "api-gateway"],
-        decision_date="2024-03-15",
+        date="2024-03-15",
         status="active",
-        constraint_type="security",
+        domain="security",
         author="thaneesh",
-        linked_adr_ids=[],
     )
 
     return [
@@ -102,11 +101,10 @@ def decision_only_chunks():
         source_type="ADR",
         doc_id="adr-002",
         affected_services=["payments-service"],
-        decision_date="2024-06-01",
+        date="2024-06-01",
         status="active",
-        constraint_type="data_model",
+        domain="data_model",
         author="thaneesh",
-        linked_adr_ids=[],
     )
 
     return [

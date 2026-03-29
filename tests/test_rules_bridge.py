@@ -26,7 +26,7 @@ def llm_extraction_response():
                 "context": "Need stateless auth for horizontal scaling.",
                 "rejected": "Session cookies rejected due to centralised store and GDPR conflict.",
                 "services": ["auth-service", "api-gateway"],
-                "constraint_type": "security",
+                "domain": "security",
             },
             {
                 "title": "Event-driven inter-service communication",
@@ -34,7 +34,7 @@ def llm_extraction_response():
                 "context": "Decoupling services for independent deployment.",
                 "rejected": "Direct HTTP calls between services.",
                 "services": [],
-                "constraint_type": "scalability",
+                "domain": "scalability",
             },
             {
                 "title": "Legacy payments SOAP client",
@@ -42,7 +42,7 @@ def llm_extraction_response():
                 "context": "",
                 "rejected": "",
                 "services": ["payments"],
-                "constraint_type": "operational",
+                "domain": "operational",
             },
         ]
     })
@@ -65,7 +65,7 @@ def llm_all_services_response():
                 "context": "",
                 "rejected": "MongoDB rejected for transactional workloads.",
                 "services": ["all"],
-                "constraint_type": "data_model",
+                "domain": "data_model",
             },
         ]
     })
@@ -104,6 +104,7 @@ class TestExtractDecisions:
         assert "Section: Decision" in jwt_decision.text
         assert jwt_decision.source_type == "rules_file"
         assert jwt_decision.status == "active"
+        assert jwt_decision.knowledge_type == "decision"
 
     @pytest.mark.asyncio
     async def test_creates_separate_rejected_alternatives_chunks(
@@ -261,10 +262,10 @@ class TestExtractDecisions:
             assert ".." not in c.doc_id
 
     @pytest.mark.asyncio
-    async def test_constraint_types_preserved(
+    async def test_domain_preserved(
         self, test_settings, llm_extraction_response
     ):
-        """Constraint types from LLM output are correctly assigned."""
+        """Domain values from LLM output are correctly assigned."""
         from app.rules_bridge import extract_decisions_from_rules
 
         with patch(
@@ -279,10 +280,10 @@ class TestExtractDecisions:
             )
 
         jwt_chunk = [c for c in chunks if "JWT" in c.text and c.section_type == "decision"][0]
-        assert jwt_chunk.constraint_type == "security"
+        assert jwt_chunk.domain == "security"
 
         rabbitmq_chunk = [c for c in chunks if "RabbitMQ" in c.text and c.section_type == "decision"][0]
-        assert rabbitmq_chunk.constraint_type == "scalability"
+        assert rabbitmq_chunk.domain == "scalability"
 
 
 class TestIngestRulesTool:

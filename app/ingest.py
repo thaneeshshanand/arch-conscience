@@ -133,17 +133,15 @@ def _parse_adr(raw: str, filename: str) -> list[ChunkRecord]:
     adr_id = frontmatter.get("id", filename)
     status = frontmatter.get("status", "active")
     title = frontmatter.get("title", adr_id)
-    constraint_type = frontmatter.get("constraint_type", "operational")
+    domain = frontmatter.get("constraint_type", "operational")
     author = frontmatter.get("author", "unknown")
-    decision_date = frontmatter.get("date", "")
+    adr_date = frontmatter.get("date", "")
 
     services_raw = frontmatter.get("services", [])
     if isinstance(services_raw, str):
         services = [services_raw]
     else:
         services = list(services_raw)
-
-    linked = [frontmatter["supersedes"]] if "supersedes" in frontmatter else []
 
     # Split body into sections on ## headings
     sections = _split_sections(body)
@@ -166,15 +164,16 @@ def _parse_adr(raw: str, filename: str) -> list[ChunkRecord]:
             ChunkRecord(
                 id=f"{adr_id}-{section_type}",
                 text=chunk_text,
-                source_type="ADR",
+                knowledge_type="decision",
+                source_type="adr",
                 doc_id=adr_id,
                 section_type=section_type,
                 affected_services=services,
-                decision_date=decision_date,
+                date=adr_date,
                 status=status,
-                constraint_type=constraint_type,
+                domain=domain,
                 author=author,
-                linked_adr_ids=linked,
+                source_title=title,
             )
         )
 
@@ -290,11 +289,13 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
                 ChunkRecord(
                     id=f"confluence-{page_id}-{i}",
                     text=f"Page: {page_title}\n\n{block}",
+                    knowledge_type="decision",
                     source_type="confluence",
                     doc_id=f"confluence-{page_id}",
                     section_type="context",
-                    decision_date=page_date,
+                    date=page_date,
                     author=page_author,
+                    source_title=page_title,
                 )
             )
 
@@ -344,11 +345,13 @@ async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
             ChunkRecord(
                 id=f"jira-{issue_key}",
                 text=f"Jira Epic: {summary}\n\n{description}",
+                knowledge_type="decision",
                 source_type="jira",
                 doc_id=issue_key,
                 section_type="decision",
-                decision_date=created,
+                date=created,
                 author=assignee,
+                source_title=summary,
             )
         )
 

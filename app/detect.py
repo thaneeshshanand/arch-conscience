@@ -151,7 +151,7 @@ def _build_stage1_prompt(
         f"doc_id: {c.chunk.doc_id}\n"
         f"section_type: {c.chunk.section_type}\n"
         f"affected_services: {', '.join(c.chunk.affected_services)}\n"
-        f"constraint_type: {c.chunk.constraint_type}\n"
+        f"domain: {c.chunk.domain}\n"
         f"text: {c.chunk.text[:300]}"
         for i, c in enumerate(chunks)
     )
@@ -199,9 +199,9 @@ Before concluding a gap exists, ask: does the change remove or override an exist
 
 ### Step 5 — Determine severity
 Apply these rules in order (first match wins):
-- constraint_type is security or compliance → high
+- domain is security or compliance → high
 - rejected_alt_reintroduced is true → high
-- constraint_type is data_model or scalability → medium
+- domain is data_model or scalability → medium
 - All other contradictions → low
 
 ### Step 6 — Produce output
@@ -274,9 +274,9 @@ def _build_stage2_prompt(
         f"doc_id: {c.chunk.doc_id}\n"
         f"section_type: {c.chunk.section_type}\n"
         f"affected_services: {', '.join(c.chunk.affected_services)}\n"
-        f"constraint_type: {c.chunk.constraint_type}\n"
+        f"domain: {c.chunk.domain}\n"
         f"status: {c.chunk.status}\n"
-        f"decision_date: {c.chunk.decision_date}\n"
+        f"date: {c.chunk.date}\n"
         f"author: {c.chunk.author}\n"
         f"text: {c.chunk.text}"
         for c in chunks

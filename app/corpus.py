@@ -8,6 +8,7 @@ Payload fields indexed for service and status filtering at query time.
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
@@ -40,19 +41,38 @@ _TEXT_TRUNCATE = 8000  # stay within embedding token budget
 
 @dataclass(frozen=True, slots=True)
 class ChunkRecord:
-    """A single corpus chunk, ready for upsert or returned from query."""
+    """A single corpus chunk, ready for upsert or returned from query.
+
+    16 fields total: 13 auto-populated, 3 enrichment (empty defaults).
+    See DESIGN-format-agnostic-ingestion.md for full schema rationale.
+    """
 
     id: str
     text: str
-    source_type: str  # ADR | confluence | jira
-    doc_id: str
-    section_type: str  # context | decision | consequences | rejected_alternatives
-    affected_services: list[str] = field(default_factory=list)
-    decision_date: str = ""
-    status: str = "active"
-    constraint_type: str = "operational"
+
+    # ── Auto-populated: core (extracted by LLM or source system) ─────
+
+    knowledge_type: str = "decision"  # decision | constraint | principle
+    section_type: str = ""  # context | decision | consequences | rejected_alternatives
+    source_type: str = ""  # adr | design_doc | rfc | rules_file | confluence | jira | notion | runbook | informal
+    doc_id: str = ""
     author: str = "unknown"
-    linked_adr_ids: list[str] = field(default_factory=list)
+    affected_services: list[str] = field(default_factory=list)
+    domain: str = "operational"  # security | compliance | performance | scalability | data_model | operational
+    status: str = "active"
+    date: str = ""  # when the knowledge was established
+
+    # ── Auto-populated: provenance (from source system, no human input)
+
+    source_url: str = ""
+    source_title: str = ""
+    ingested_at: str = ""
+
+    # ── Enrichment: optional (empty defaults, teams add over time) ───
+
+    owners: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source_last_modified: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,9 +148,10 @@ async def ensure_collection(settings: Settings | None = None) -> None:
 
     # Index payload fields used as filters at query time
     for field_name, schema in [
+        ("knowledge_type", PayloadSchemaType.KEYWORD),
         ("affected_services", PayloadSchemaType.KEYWORD),
         ("status", PayloadSchemaType.KEYWORD),
-        ("constraint_type", PayloadSchemaType.KEYWORD),
+        ("domain", PayloadSchemaType.KEYWORD),
     ]:
         await client.create_payload_index(
             collection_name=collection,
@@ -152,6 +173,11 @@ def _stable_id(chunk_id: str) -> str:
     cleaner than the 32-bit hash in the Node.js version.
     """
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
+
+
+def _now_iso() -> str:
+    """Return current UTC time as ISO string."""
+    return datetime.utcnow().isoformat() + "Z"
 
 
 async def upsert(chunks: list[ChunkRecord], settings: Settings | None = None) -> int:
@@ -176,15 +202,21 @@ async def upsert(chunks: list[ChunkRecord], settings: Settings | None = None) ->
                 vector=vector,
                 payload={
                     "text": chunk.text,
+                    "knowledge_type": chunk.knowledge_type,
+                    "section_type": chunk.section_type,
                     "source_type": chunk.source_type,
                     "doc_id": chunk.doc_id,
-                    "section_type": chunk.section_type,
-                    "affected_services": chunk.affected_services,
-                    "decision_date": chunk.decision_date,
-                    "status": chunk.status,
-                    "constraint_type": chunk.constraint_type,
                     "author": chunk.author,
-                    "linked_adr_ids": chunk.linked_adr_ids,
+                    "affected_services": chunk.affected_services,
+                    "domain": chunk.domain,
+                    "status": chunk.status,
+                    "date": chunk.date,
+                    "source_url": chunk.source_url,
+                    "source_title": chunk.source_title,
+                    "ingested_at": chunk.ingested_at or _now_iso(),
+                    "owners": chunk.owners,
+                    "tags": chunk.tags,
+                    "source_last_modified": chunk.source_last_modified,
                 },
             )
         )
@@ -264,15 +296,21 @@ async def query(
         chunk = ChunkRecord(
             id=p.get("doc_id", "") + "-" + p.get("section_type", ""),
             text=p.get("text", ""),
+            knowledge_type=p.get("knowledge_type", "decision"),
+            section_type=p.get("section_type", ""),
             source_type=p.get("source_type", ""),
             doc_id=p.get("doc_id", ""),
-            section_type=p.get("section_type", ""),
-            affected_services=p.get("affected_services", []),
-            decision_date=p.get("decision_date", ""),
-            status=p.get("status", "active"),
-            constraint_type=p.get("constraint_type", "operational"),
             author=p.get("author", "unknown"),
-            linked_adr_ids=p.get("linked_adr_ids", []),
+            affected_services=p.get("affected_services", []),
+            domain=p.get("domain", "operational"),
+            status=p.get("status", "active"),
+            date=p.get("date", ""),
+            source_url=p.get("source_url", ""),
+            source_title=p.get("source_title", ""),
+            ingested_at=p.get("ingested_at", ""),
+            owners=p.get("owners", []),
+            tags=p.get("tags", []),
+            source_last_modified=p.get("source_last_modified", ""),
         )
         scored.append(ScoredChunk(chunk=chunk, score=r.score, point_id=str(r.id)))
 
