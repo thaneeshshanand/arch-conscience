@@ -510,7 +510,7 @@ arch-conscience/
 │   │                              resolution, update_payload, find_overlapping)
 │   ├── detect.py                Two-stage knowledge-type-aware detection pipeline
 │   ├── router.py                GitHub payload → PipelinePayload
-│   ├── notify.py                Telegram alert dispatch
+│   ├── notify.py                Telegram + Slack alert dispatch (per-service routing)
 │   ├── ingest.py                ADR / Confluence / Jira ingestion
 │   ├── gap_log.py               Corpus gap signal logger (JSONL)
 │   ├── adr_drafter.py           LLM-powered ADR draft generator

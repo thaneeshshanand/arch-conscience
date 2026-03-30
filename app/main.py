@@ -135,6 +135,7 @@ async def webhook(
         result=result,
         engineer=payload.author,
         pr_url=payload.pr_url,
+        affected_services=payload.affected_services,
         settings=settings,
     )
 

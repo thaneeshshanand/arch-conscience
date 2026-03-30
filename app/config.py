@@ -81,6 +81,21 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = Field(default="", description="Telegram bot token")
     TELEGRAM_CHAT_ID: str = Field(default="", description="Telegram chat ID")
 
+    # ── Slack ─────────────────────────────────────────────────────────
+    SLACK_WEBHOOK_URL: str = Field(
+        default="",
+        description="Default Slack incoming webhook URL (fallback when service not in SLACK_CHANNEL_MAP)",
+    )
+    SLACK_CHANNEL_MAP_RAW: str = Field(
+        default="{}",
+        alias="SLACK_CHANNEL_MAP",
+        description=(
+            "JSON map of service names to Slack incoming webhook URLs. "
+            'e.g. {"auth-service": "https://hooks.slack.com/...", '
+            '"payments-service": "https://hooks.slack.com/..."}'
+        ),
+    )
+
     # ── Detection tuning ─────────────────────────────────────────────
     CONFIDENCE_THRESHOLD: float = Field(
         default=0.7, description="Min confidence to fire a gap alert"
@@ -106,6 +121,13 @@ class Settings(BaseSettings):
     def service_map(self) -> dict[str, str]:
         try:
             return json.loads(self.SERVICE_MAP_RAW)
+        except json.JSONDecodeError:
+            return {}
+
+    @property
+    def slack_channel_map(self) -> dict[str, str]:
+        try:
+            return json.loads(self.SLACK_CHANNEL_MAP_RAW)
         except json.JSONDecodeError:
             return {}
 
