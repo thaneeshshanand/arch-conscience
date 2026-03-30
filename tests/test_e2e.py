@@ -587,3 +587,46 @@ class TestQueryTimeResolution:
 
         result = _resolve_conflicts([chunk])
         assert len(result) == 1
+    
+    def test_superseded_in_one_area_keeps_other_areas(self):
+        """A doc_id superseded in security should keep its data_model chunks."""
+        from app.corpus import _resolve_conflicts
+
+        # adr-001: older security decision + data_model decision
+        old_security = ScoredChunk(
+            chunk=ChunkRecord(
+                id="old-sec", text="Old security.",
+                doc_id="adr-001", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+                date="2024-01-01",
+            ),
+            score=0.8, point_id="uuid-old-sec",
+        )
+        data_model = ScoredChunk(
+            chunk=ChunkRecord(
+                id="dm", text="Data model.",
+                doc_id="adr-001", section_type="decision",
+                domain="data_model", affected_services=["auth-service"],
+                date="2024-01-01",
+            ),
+            score=0.7, point_id="uuid-dm",
+        )
+        # adr-005: newer security decision
+        new_security = ScoredChunk(
+            chunk=ChunkRecord(
+                id="new-sec", text="New security.",
+                doc_id="adr-005", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+                date="2025-06-01",
+            ),
+            score=0.75, point_id="uuid-new-sec",
+        )
+
+        result = _resolve_conflicts([old_security, data_model, new_security])
+        doc_ids = {sc.chunk.doc_id for sc in result}
+        domains = {sc.chunk.domain for sc in result}
+
+        # adr-005 wins security, adr-001 keeps data_model
+        assert "adr-005" in doc_ids
+        assert "data_model" in domains
+        assert len(result) == 2
