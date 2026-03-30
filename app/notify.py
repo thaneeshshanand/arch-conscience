@@ -86,8 +86,17 @@ def _format_message(
         f"Severity: {result.severity}",
     ]
 
+    if result.constraint_type:
+        lines.append(f"Domain: {result.constraint_type}")
+
     if result.rejected_alt_reintroduced:
         lines.append("\u26a0\ufe0f This approach was explicitly rejected in the ADR.")
+
+    if result.corpus_conflict:
+        lines.append(
+            "\u26a0\ufe0f Note: The corpus contains conflicting guidance in this "
+            "area. Review related items and resolve with update_item_status."
+        )
 
     return "\n".join(line for line in lines if line is not None)
 

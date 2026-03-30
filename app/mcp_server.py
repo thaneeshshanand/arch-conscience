@@ -65,7 +65,7 @@ mcp = FastMCP(
 
 def _format_chunk(chunk, score: float) -> dict[str, Any]:
     """Format a scored chunk for tool output."""
-    return {
+    result = {
         "adr_id": chunk.doc_id,
         "section": chunk.section_type,
         "knowledge_type": chunk.knowledge_type,
@@ -75,6 +75,11 @@ def _format_chunk(chunk, score: float) -> dict[str, Any]:
         "relevance_score": round(score, 3),
         "text": chunk.text,
     }
+    if chunk.source_url:
+        result["source_url"] = chunk.source_url
+    if chunk.source_title:
+        result["source_title"] = chunk.source_title
+    return result
 
 
 def _analyze_conflicts(chunks) -> dict[str, Any]:
@@ -196,9 +201,12 @@ async def get_architectural_context(
         response.update(_analyze_conflicts(chunks))
     else:
         response["instructions"] = (
-            "Review these architectural decisions before generating code. "
-            "Pay special attention to 'rejected_alternatives' sections — "
-            "these describe approaches that were explicitly ruled out. "
+            "Review these architectural items before generating code. "
+            "Behavior depends on knowledge_type: "
+            "constraint → refuse to generate violating code (hard stop). "
+            "decision with rejected_alternatives → refuse and explain why "
+            "the alternative was rejected. "
+            "principle → proceed but flag the deviation to the engineer. "
             "Do NOT generate code that reintroduces a rejected approach."
         )
 

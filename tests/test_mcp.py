@@ -147,6 +147,7 @@ class TestGetArchitecturalContext:
         assert "approach" not in result
         assert "verdict" not in result
         assert "instructions" in result
+        assert "knowledge_type" in result["instructions"]
         assert "rejected_alternatives" in result["adr_summary"]["adr-001"]
 
     @pytest.mark.asyncio

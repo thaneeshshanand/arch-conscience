@@ -449,3 +449,141 @@ class TestNotifyFormat:
 
         # Should not crash on None fields
         assert "Author: @dev" in msg
+
+    def test_format_includes_domain(self):
+        from app.notify import _format_message
+
+        result = DetectionResult(
+            gap_detected=True,
+            confidence=0.9,
+            severity="high",
+            violated_adr_id="adr-001",
+            constraint_type="security",
+            alert_headline="Constraint violated",
+            alert_body="HTTPS required.",
+        )
+
+        msg = _format_message(
+            result=result,
+            engineer="dev",
+            pr_url="https://github.com/acme/backend/pull/1",
+        )
+
+        assert "Domain: security" in msg
+
+    def test_format_includes_corpus_conflict_note(self):
+        from app.notify import _format_message
+
+        result = DetectionResult(
+            gap_detected=True,
+            confidence=0.8,
+            severity="medium",
+            violated_adr_id="adr-002",
+            alert_headline="Conflict detected",
+            alert_body="Contradicts ADR-002.",
+            corpus_conflict=True,
+        )
+
+        msg = _format_message(
+            result=result,
+            engineer="dev",
+            pr_url="https://github.com/acme/backend/pull/5",
+        )
+
+        assert "conflicting guidance" in msg
+
+
+class TestQueryTimeResolution:
+    """Corpus query-time conflict resolution."""
+
+    def test_newer_item_wins_over_older(self):
+        from app.corpus import _resolve_conflicts
+
+        old_chunk = ScoredChunk(
+            chunk=ChunkRecord(
+                id="old-decision", text="Old decision.",
+                doc_id="adr-001", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+                date="2024-01-01",
+            ),
+            score=0.8, point_id="uuid-old",
+        )
+        new_chunk = ScoredChunk(
+            chunk=ChunkRecord(
+                id="new-decision", text="New decision.",
+                doc_id="adr-005", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+                date="2025-06-01",
+            ),
+            score=0.7, point_id="uuid-new",
+        )
+
+        result = _resolve_conflicts([old_chunk, new_chunk])
+        doc_ids = {sc.chunk.doc_id for sc in result}
+        assert "adr-005" in doc_ids
+        assert "adr-001" not in doc_ids
+
+    def test_service_specific_wins_over_project_wide(self):
+        from app.corpus import _resolve_conflicts
+
+        project_wide = ScoredChunk(
+            chunk=ChunkRecord(
+                id="pw-decision", text="Project-wide rule.",
+                doc_id="rules-1", section_type="decision",
+                domain="security", affected_services=[],
+                date="2025-01-01",
+            ),
+            score=0.8, point_id="uuid-pw",
+        )
+        service_specific = ScoredChunk(
+            chunk=ChunkRecord(
+                id="ss-decision", text="Service-specific rule.",
+                doc_id="adr-001", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+                date="2024-01-01",
+            ),
+            score=0.7, point_id="uuid-ss",
+        )
+
+        result = _resolve_conflicts([project_wide, service_specific])
+        doc_ids = {sc.chunk.doc_id for sc in result}
+        assert "adr-001" in doc_ids
+        assert "rules-1" not in doc_ids
+
+    def test_no_conflict_passes_through(self):
+        from app.corpus import _resolve_conflicts
+
+        chunk_a = ScoredChunk(
+            chunk=ChunkRecord(
+                id="a-decision", text="Decision A.",
+                doc_id="adr-001", section_type="decision",
+                domain="security", affected_services=["auth-service"],
+            ),
+            score=0.8, point_id="uuid-a",
+        )
+        chunk_b = ScoredChunk(
+            chunk=ChunkRecord(
+                id="b-context", text="Context B.",
+                doc_id="adr-001", section_type="context",
+                domain="security", affected_services=["auth-service"],
+            ),
+            score=0.7, point_id="uuid-b",
+        )
+
+        result = _resolve_conflicts([chunk_a, chunk_b])
+        assert len(result) == 2
+
+    def test_single_chunk_passes_through(self):
+        from app.corpus import _resolve_conflicts
+
+        chunk = ScoredChunk(
+            chunk=ChunkRecord(
+                id="solo", text="Solo.",
+                doc_id="adr-001", section_type="decision",
+                domain="security",
+            ),
+            score=0.9, point_id="uuid-solo",
+        )
+
+        result = _resolve_conflicts([chunk])
+        assert len(result) == 1

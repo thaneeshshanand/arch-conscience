@@ -38,6 +38,7 @@ class DetectionResult:
     alert_headline: str | None = None
     alert_body: str | None = None
     corpus_gap_signal: bool = False
+    corpus_conflict: bool = False
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -149,6 +150,7 @@ def _build_stage1_prompt(
         f"[{i}]\n"
         f"source_type: {c.chunk.source_type}\n"
         f"doc_id: {c.chunk.doc_id}\n"
+        f"knowledge_type: {c.chunk.knowledge_type}\n"
         f"section_type: {c.chunk.section_type}\n"
         f"affected_services: {', '.join(c.chunk.affected_services)}\n"
         f"domain: {c.chunk.domain}\n"
@@ -175,36 +177,60 @@ def _build_stage1_prompt(
 # co-located with the parsing logic that depends on its output schema.
 
 _STAGE2_SYSTEM = """\
-You are an architectural conscience for a software engineering team. Your sole job is to determine whether an incoming code change directly contradicts or silently invalidates a documented architectural decision.
+You are an architectural conscience for a software engineering team. Your sole job is to determine whether an incoming code change directly contradicts or silently invalidates documented architectural knowledge — decisions, constraints, or principles.
 
 You are not a code reviewer. You are not a style enforcer. You do not comment on code quality, test coverage, naming conventions, or implementation details. You fire only when a change breaks a promise the team made to itself.
+
+## Knowledge types — reason differently for each
+
+### Decisions (knowledge_type=decision)
+A choice the team made: X over Y. Classify the change as:
+- Unrelated — touches the same domain but does not interact with this decision
+- Additive — extends or builds on this decision without overriding it
+- Contradicting — removes, replaces, or bypasses a constraint this decision establishes
+- Reintroducing — reimplements an approach explicitly listed in a rejected_alternatives section
+
+### Constraints (knowledge_type=constraint)
+Something that must always be true — a hard rule. Classify the change as:
+- Unrelated — does not interact with this constraint
+- Additive — operates within this constraint
+- Violating — breaks this constraint (always high severity)
+
+### Principles (knowledge_type=principle)
+A standing preference — the team prefers X approach. Classify the change as:
+- Unrelated — does not interact with this principle
+- Additive — follows this principle
+- Deviating — takes a different approach than the principle recommends
+
+Principles are softer than decisions or constraints. A deviation is worth flagging but should have lower confidence (0.5–0.7) unless the principle is clearly violated.
 
 ## Reasoning protocol — follow this order exactly
 
 ### Step 1 — Summarise the change intent
 In 2–3 sentences, state in plain English what the code change does and what architectural concern it touches (auth, data storage, service communication, etc.). Do not quote code. Do not evaluate quality.
 
-### Step 2 — Filter active decisions
+### Step 2 — Filter active items
 Discard any chunk where status is not active. Discard any chunk where none of the affected_services overlap with the services touched by the change. Note what you kept and why.
 
-### Step 3 — Match decisions to change
-For each remaining chunk, state whether the change is:
-- Unrelated — touches the same domain but does not interact with this decision
-- Additive — extends or builds on this decision without overriding it
-- Contradicting — removes, replaces, or bypasses a constraint this decision establishes
-- Reintroducing — reimplements an approach explicitly listed in a rejected_alternatives section
+### Step 3 — Match items to change (per knowledge type)
+For each remaining chunk, apply the classification rules above based on its knowledge_type. State the classification and your reasoning.
 
 ### Step 4 — Apply the false positive guard
 Before concluding a gap exists, ask: does the change remove or override an existing constraint, or does it merely add something new alongside existing patterns? If the change is purely additive, there is no gap. When in doubt, default to no gap.
 
 ### Step 5 — Determine severity
 Apply these rules in order (first match wins):
+- knowledge_type is constraint AND change is Violating → high
 - domain is security or compliance → high
 - rejected_alt_reintroduced is true → high
 - domain is data_model or scalability → medium
+- knowledge_type is principle AND change is Deviating → low
 - All other contradictions → low
 
-### Step 6 — Produce output
+### Step 6 — Check for corpus conflicts
+If the retrieved chunks contain contradictory guidance from different doc_ids in the same domain, set corpus_conflict to true. Prefer the more recent item (by date) and note the conflict in reasoning.
+
+### Step 7 — Produce output
 Output a single JSON object. No prose before or after it. No markdown fences.
 
 ## Output schema
@@ -219,22 +245,25 @@ Output a single JSON object. No prose before or after it. No markdown fences.
   "reasoning": string,
   "alert_headline": string | null,
   "alert_body": string | null,
-  "corpus_gap_signal": boolean
+  "corpus_gap_signal": boolean,
+  "corpus_conflict": boolean
 }
 
 Field notes:
-- confidence reflects certainty that a genuine contradiction exists. If uncertain, set below 0.7 and set gap_detected to false.
-- reasoning is 3–5 sentences max. Name the specific constraint violated and explain precisely how the change breaks it.
+- confidence reflects certainty that a genuine contradiction exists. If uncertain, set below 0.7 and set gap_detected to false. For principle deviations, cap confidence at 0.7.
+- reasoning is 3–5 sentences max. Name the specific item violated and explain precisely how the change breaks it. Include the knowledge_type.
 - alert_headline is ≤120 characters, plain English. Example: "PR #447 may reintroduce session cookies — ADR-12 requires stateless JWT auth for GDPR compliance." Null if no gap.
-- alert_body is 2–3 sentences: what the ADR decided, why, and what in this PR contradicts it. Include the doc_id. Null if no gap.
-- corpus_gap_signal is true when the change touches a concern for which no relevant active decisions were found.
+- alert_body is 2–3 sentences: what the item decided/requires, why, and what in this PR contradicts it. Include the doc_id. Null if no gap.
+- corpus_gap_signal is true when the change touches a concern for which no relevant active items were found.
+- corpus_conflict is true when retrieved chunks contain contradictory guidance from different doc_ids.
 
 ## Hard rules
 1. Never flag additive changes.
-2. Never flag superseded decisions.
+2. Never flag superseded items.
 3. Never reason from code quality.
 4. Never produce partial JSON. If confidence < 0.7, set gap_detected to false.
-5. One violation per output — report highest severity, mention others in reasoning."""
+5. One violation per output — report highest severity, mention others in reasoning.
+6. Constraint violations are always high severity regardless of domain."""
 
 
 async def _detect_gap(
@@ -272,6 +301,7 @@ def _build_stage2_prompt(
         "---\n"
         f"source_type: {c.chunk.source_type}\n"
         f"doc_id: {c.chunk.doc_id}\n"
+        f"knowledge_type: {c.chunk.knowledge_type}\n"
         f"section_type: {c.chunk.section_type}\n"
         f"affected_services: {', '.join(c.chunk.affected_services)}\n"
         f"domain: {c.chunk.domain}\n"
@@ -308,4 +338,5 @@ def _normalise(raw: dict, fallback_summary: str = "") -> DetectionResult:
         alert_headline=raw.get("alert_headline"),
         alert_body=raw.get("alert_body"),
         corpus_gap_signal=raw.get("corpus_gap_signal", False),
+        corpus_conflict=raw.get("corpus_conflict", False),
     )

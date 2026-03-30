@@ -7,6 +7,7 @@ Payload fields indexed for service and status filtering at query time.
 
 import logging
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -314,7 +315,80 @@ async def query(
         )
         scored.append(ScoredChunk(chunk=chunk, score=r.score, point_id=str(r.id)))
 
-    return scored
+    return _resolve_conflicts(scored)
+
+
+# ── Query-time conflict resolution ───────────────────────────────
+
+
+def _resolve_conflicts(chunks: list[ScoredChunk]) -> list[ScoredChunk]:
+    """Resolve conflicts in retrieved chunks by preferring newer items.
+
+    When the same domain + affected_services area has chunks from
+    multiple doc_ids, prefer the newer one (by date field).
+    Service-specific items take precedence over project-wide items
+    for that service.
+
+    Project-wide items still appear in results — they just don't
+    win over a service-specific item in the same domain.
+
+    Resolution is per-area: a doc_id superseded in one area keeps
+    its chunks in other areas where it's not in conflict.
+    """
+    if len(chunks) <= 1:
+        return chunks
+
+    # Group chunks by overlap area: (domain, frozenset of services)
+    area_groups: dict[tuple[str, frozenset[str]], list[ScoredChunk]] = defaultdict(list)
+
+    for sc in chunks:
+        domain = sc.chunk.domain
+        services = frozenset(sc.chunk.affected_services)
+        area_groups[(domain, services)].append(sc)
+
+    # Collect individual chunks to remove (not doc_ids)
+    chunks_to_remove: set[str] = set()  # point_ids to remove
+
+    # Rule 1: Within each area, if multiple doc_ids, keep the newest
+    for (domain, services), group in area_groups.items():
+        doc_ids_in_group = {sc.chunk.doc_id for sc in group}
+        if len(doc_ids_in_group) <= 1:
+            continue
+
+        # Find the newest doc_id by date
+        newest_date = ""
+        newest_doc_id = ""
+        for sc in group:
+            chunk_date = sc.chunk.date or ""
+            if chunk_date > newest_date:
+                newest_date = chunk_date
+                newest_doc_id = sc.chunk.doc_id
+
+        # Mark chunks from older doc_ids in THIS area only
+        if newest_doc_id:
+            for sc in group:
+                if sc.chunk.doc_id != newest_doc_id:
+                    chunks_to_remove.add(sc.point_id)
+
+    # Rule 2: Service-specific items take precedence over project-wide
+    # in the same domain
+    service_specific_domains: set[str] = set()
+    for (domain, services), group in area_groups.items():
+        if services:  # non-empty = service-specific
+            service_specific_domains.add(domain)
+
+    for (domain, services), group in area_groups.items():
+        if not services and domain in service_specific_domains:
+            for sc in group:
+                chunks_to_remove.add(sc.point_id)
+
+    if not chunks_to_remove:
+        return chunks
+
+    resolved = [sc for sc in chunks if sc.point_id not in chunks_to_remove]
+
+    # Safety net: if resolution removed everything, return originals
+    return resolved if resolved else chunks
 
 
 # ── Update ───────────────────────────────────────────────────────
@@ -392,6 +466,7 @@ async def find_overlapping(
     must_clauses = [
         FieldCondition(key="status", match=MatchValue(value=status)),
         FieldCondition(key="domain", match=MatchValue(value=domain)),
+        FieldCondition(key="section_type", match=MatchValue(value="decision")),
     ]
 
     if affected_services:
