@@ -6,7 +6,7 @@
 
 ## The problem
 
-Engineering teams make architectural decisions for good reasons. They write them down in ADRs, Confluence pages, and Jira epics. Then six months later, an engineer (or their AI coding agent) opens a PR that reintroduces the exact approach the team explicitly rejected. Because neither the human nor the agent knew the decision existed.
+Engineering teams make architectural decisions for good reasons. They write them down in ADRs, Confluence pages, design docs, and rules files. Then six months later, an engineer (or their AI coding agent) opens a PR that reintroduces the exact approach the team explicitly rejected. Because neither the human nor the agent knew the decision existed.
 
 In a world where AI generates nearly half of all production code, architectural drift isn't a documentation problem anymore. It's a systemic gap in the development loop. The coding agent has zero awareness of your team's decisions.
 
@@ -16,55 +16,117 @@ arch-conscience closes that gap.
 
 ## What it does
 
-**Prevents violations at code-generation time.** AI coding agents (Claude Code, Cursor, Copilot) call arch-conscience via MCP before writing code. The agent sees your team's constraints, rejected alternatives, and active decisions, and refuses to generate code that violates them.
+**Prevents violations at code-generation time.** AI coding agents (Claude Code, Cursor, Copilot) call arch-conscience via MCP before writing code. The agent's behavior adapts to the type of knowledge being violated — hard constraints trigger an outright refusal, decisions with rejected alternatives trigger a refusal with explanation, and principles flag a deviation but let the developer proceed.
 
-**Catches violations at PR time.** A webhook pipeline watches every PR, retrieves relevant ADRs, runs a two-stage detection pipeline, and alerts the responsible engineer via Telegram when a genuine contradiction is found.
+**Catches violations at PR time.** A webhook pipeline watches every PR, retrieves relevant knowledge items, runs a two-stage detection pipeline with knowledge-type-aware reasoning, and alerts the responsible engineer via Telegram when a genuine contradiction is found.
+
+**Ingests your existing documentation.** arch-conscience meets teams where they are. Point it at an ADR directory, a CLAUDE.md or .cursorrules file, a Confluence page, an RFC, or any other document where your team has written down an architectural thought. A two-pass LLM pipeline extracts the decisions, constraints, and principles automatically — no reformatting required.
 
 **Drafts new ADRs from conversation.** When an engineer makes a significant architectural decision, the agent generates a structured ADR with Context, Decision, Consequences, and Rejected Alternatives sections, informed by existing decisions in the corpus.
-
-**Ingests your existing rules files.** Already have a CLAUDE.md, .cursorrules, or AGENTS.md? arch-conscience extracts the architectural decisions from it using an LLM (ignoring code style, commands, and setup instructions), indexes them into the corpus, and starts enforcing them. No need to rewrite anything in ADR format.
 
 **Knows what it doesn't know.** When a PR touches a service with no documented decisions, the system logs a corpus gap signal, surfacing blind spots in your architectural knowledge base.
 
 ---
 
-## Demo: AI agent refuses to violate an ADR
+## Knowledge types — how the agent reasons
+
+arch-conscience distinguishes three kinds of architectural knowledge. Each drives different agent behavior:
+
+| Type | Definition | Agent behavior | Detection severity |
+|------|-----------|----------------|-------------------|
+| **Decision** | The team chose X over Y | Refuse + explain why the alternative was rejected | By domain (security/compliance → high) |
+| **Constraint** | X must always be true | Hard stop — refuse unconditionally | Always high |
+| **Principle** | The team prefers X approach | Proceed, but flag the deviation | Low (confidence capped at 0.7) |
+
+This taxonomy lets the agent escalate correctly without crying wolf. A coding style deviation is a low-confidence flag. A constraint violation is a hard stop, full stop.
+
+---
+
+## Demo: AI agent refuses to violate a constraint
+
+> This demo requires a constraint to be ingested. The sample below uses a rule extracted from a CLAUDE.md: `"All external API calls must go through the API gateway. Services must not call third-party APIs directly."` Run `ingest_document` on your team's rules file to unlock this behavior.
 
 ```
-You: I need to add authentication to the auth-service. I'm thinking of 
-     using session cookies with a Redis-backed session store.
+You: Add a feature to call the Stripe API directly from the
+     payments worker.
 
-Claude Code: [calls get_architectural_context]
+Claude Code: [calls get_architectural_context(service="payments-worker",
+              approach="Direct Stripe API call from payments worker")]
+
+     Hard stop. This violates an active constraint:
+
+     "All external API calls must go through the API gateway.
+      Services must not call third-party APIs directly."
+
+     This is a compliance constraint — it was put in place for
+     centralized rate limiting, audit logging, and secrets management.
+     Bypassing the gateway means Stripe credentials and call volume
+     would be invisible to monitoring.
+
+     I won't generate this code. If the constraint should be revisited,
+     use draft_adr to propose a change and route it through the team.
+```
+
+---
+
+## Demo: AI agent refuses to reintroduce a rejected alternative
+
+```
+You: I need to add authentication to the auth-service. I'm thinking
+     of using session cookies with a Redis-backed session store.
+
+Claude Code: [calls get_architectural_context(service="auth-service",
+              approach="Use session cookies with Redis")]
 
      I need to flag a conflict before proceeding. ADR-001 explicitly
-     rejects session cookies for three reasons:
+     rejected session cookies for three reasons:
 
-     1. Single point of failure: centralised session store
-     2. Horizontal scaling: session state complicates scaling
-     3. GDPR data residency: session data replication across regions
+     1. Single point of failure — centralised session store
+     2. Horizontal scaling — session state complicates auto-scaling
+     3. GDPR data minimisation — retaining session data server-side
 
      The decided architecture is JWT (stateless). Want me to implement
      JWT-based auth instead, or draft an updated ADR if the original
      decision should be revisited?
 ```
 
-The agent checked your team's decisions, found the conflict, and refused to write the violating code. All before a single line was generated.
+---
+
+## Demo: Principle deviation — flagged but allowed
+
+```
+You: Use a direct database query in this handler instead of going
+     through the repository layer.
+
+Claude Code: [calls get_architectural_context(service="api",
+              approach="Direct DB query bypassing repository layer")]
+
+     Note: This deviates from a standing principle — the team prefers
+     all data access to go through the repository layer for testability
+     and consistency. There are known exceptions for reporting queries.
+
+     I'll write the direct query as requested, but flagging this so you
+     can decide whether it warrants an exception note in the ADR or a
+     TODO to refactor.
+```
 
 ---
 
 ## Quick start: Connect your coding agent
 
-If you just want to try it against the live demo corpus:
+Try it against the live demo corpus:
 
 ```bash
 # Claude Code
-claude mcp add --transport http arch-conscience https://arch-conscience-production-e722.up.railway.app/mcp/
+claude mcp add --transport http arch-conscience \
+  https://arch-conscience-production-e722.up.railway.app/mcp/
 
-# Then in Claude Code, try:
+# Then ask Claude Code:
 # "Add session cookie auth to auth-service"
+# "Call the Stripe API directly from the payments worker"
 ```
 
-To run your own instance with your team's ADRs, see [Full Setup](#full-setup) below.
+To run your own instance, see [Full Setup](#full-setup) below.
 
 ---
 
@@ -73,18 +135,21 @@ To run your own instance with your team's ADRs, see [Full Setup](#full-setup) be
 ```
 AI coding agent (Claude Code / Cursor / Copilot)
        │
-       │ MCP: get_architectural_context("auth-service")
+       │ MCP: get_architectural_context("auth-service", "session cookies")
        ▼
   arch-conscience MCP server
        │
        ▼
-  Qdrant corpus: section-level ADR chunks
+  Qdrant corpus: section-level knowledge chunks
        │ filtered by service + status: active
        ▼
-  Returns: decisions, rejected alternatives, constraints
+  Returns: decisions + rejected alternatives, constraints, principles
        │
        ▼
-  Agent generates compliant code (or refuses + explains why)
+  Agent behavior adapts to knowledge type:
+  constraint → hard stop
+  decision   → refuse + explain rejected alternative
+  principle  → flag deviation, allow proceed
 
 
 GitHub PR opened
@@ -96,14 +161,14 @@ GitHub PR opened
   Router: extracts affected services, builds diff summary
        │
        ▼
-  Qdrant corpus: hybrid search over ADRs
+  Qdrant corpus: semantic search over knowledge base
        │
        ▼
   Stage 1: relevance filter (gpt-4o-mini, cheap)
-       │
+       │ knowledge-type-aware scoring
        ▼
   Stage 2: gap detection (gpt-4o, chain-of-thought)
-       │
+       │ classifies: Violating / Contradicting / Reintroducing / Deviating
        ▼
   Alert dispatched via Telegram
 ```
@@ -112,18 +177,21 @@ GitHub PR opened
 
 ## MCP tools
 
-arch-conscience exposes two tools via the Model Context Protocol:
+arch-conscience exposes four tools via the Model Context Protocol:
 
 ### `get_architectural_context`
 
-Call before writing or modifying code. Returns relevant ADR sections and conflict analysis.
+Call before writing or modifying code. Returns relevant knowledge items and conflict analysis. Behavior adapts based on inputs:
 
 ```python
 # "What rules apply to this service?"
 get_architectural_context(service="auth-service")
 
-# "Does my plan conflict with any decision?"
-get_architectural_context(service="auth-service", approach="Use session cookies with Redis")
+# "Does my plan conflict with anything?"
+get_architectural_context(
+    service="auth-service",
+    approach="Use session cookies with Redis"
+)
 
 # "Any decisions about this anywhere?"
 get_architectural_context(approach="Replace JWT with session cookies")
@@ -132,11 +200,11 @@ get_architectural_context(approach="Replace JWT with session cookies")
 get_architectural_context()
 ```
 
-When `approach` is provided, the response includes a verdict: `potential_conflict`, `review_recommended`, or `context_available`.
+When `approach` is provided, the response includes a verdict: `potential_conflict`, `review_recommended`, or `context_available`, plus per-type behavior guidance.
 
 ### `draft_adr`
 
-Generates a structured ADR from natural conversation. Consults existing decisions in the corpus to cross-reference related ADRs.
+Generates a structured ADR from natural conversation. Queries the corpus for related decisions to cross-reference:
 
 ```python
 draft_adr(
@@ -146,47 +214,99 @@ draft_adr(
     approach="Append-only event store with materialized views",
     alternatives_considered="CRUD + audit log, third-party audit service...",
     constraint_type="compliance",
+    author="yourname",
 )
 ```
 
-Returns a complete ADR in markdown with frontmatter, ready for team review.
+Returns complete ADR markdown with frontmatter, ready for team review. Once approved, save it to the `/adrs` directory and run `python scripts/run_ingest.py` to add it to the corpus.
 
-### `ingest_rules_file`
+### `ingest_document`
 
-Extracts architectural decisions from an existing AI coding rules file and adds them to the corpus.
+Ingests any document into the corpus. Auto-detects format and routes to the appropriate handler:
+
+| Input | Handler | LLM calls |
+|-------|---------|-----------|
+| ADR with YAML frontmatter | Regex parser | 0 |
+| Known rules file (CLAUDE.md, .cursorrules, AGENTS.md…) | Rules bridge | 1 |
+| Everything else | Two-pass normalizer | 1 + N |
 
 ```python
-ingest_rules_file(
-    content="<contents of your CLAUDE.md or .cursorrules>",
-    filename="CLAUDE.md",
+# Ingest a Confluence page, design doc, RFC, or any document
+ingest_document(
+    content="<document text or HTML>",
+    filename="payments-rfc.md",          # optional — used for format detection
+    source_url="https://wiki.example.com/page/123",  # optional — provenance
+    source_type="rfc",                   # optional — provenance label
 )
 ```
 
-Uses an LLM to distinguish architectural decisions (database choices, auth patterns, service communication rules) from code style, commands, and setup instructions. Only architectural decisions are indexed. Supports CLAUDE.md, .cursorrules, AGENTS.md, rules.md, implementation.md, and similar formats.
+The response includes extracted items, chunk count, and any conflicts with existing corpus items (with resolution suggestions).
+
+### `update_item_status`
+
+Updates the status of a knowledge item — all chunks matching the `doc_id` in one call. Used for conflict resolution and lifecycle management:
+
+```python
+# Supersede an older item when a newer one takes precedence
+update_item_status(
+    doc_id="adr-002",
+    new_status="superseded",
+    reason="Replaced by adr-007 which expands scope to all services",
+)
+
+# Retire a principle that no longer applies
+update_item_status(doc_id="norm-design-doc-md-3", new_status="deprecated")
+```
+
+Valid statuses: `active`, `proposed`, `superseded`, `deprecated`.
 
 ---
 
-## What makes it different
+## Format-agnostic ingestion
 
-- **Prevents violations before code is written**, not just after. MCP integration means the agent knows your constraints at generation time.
-- **Reasons over rejected alternatives.** Catches when a PR or agent reintroduces an approach the team explicitly ruled out.
-- **Section-level retrieval.** ADRs are chunked by section (Context, Decision, Consequences, Rejected Alternatives), not by token count. The retriever surfaces the exact section most relevant to the change.
-- **Two-stage detection pipeline.** Cheap model filters for relevance, expensive model reasons about contradictions. Keeps costs low and false positives down.
-- **Corpus gap signals.** The system knows what it doesn't know, logging blind spots where services have no documented decisions.
-- **ADR drafting.** Generates structured ADRs from conversation, informed by existing decisions in the corpus.
-- **Rules file bridge.** Ingests CLAUDE.md, .cursorrules, AGENTS.md, and similar files. Extracts only the architectural decisions using an LLM, turning a bloated static rules file into a queryable, enforceable knowledge base.
+arch-conscience meets teams where they are. You don't need ADRs in a specific format — anything your team has ever written down is fair game.
+
+### What gets ingested
+
+The two-pass LLM normalizer processes any document through two stages:
+
+1. **Pass 1 — Discovery.** The full document is sent to the LLM, which returns a manifest of all knowledge items found: titles, types, and which sections contain the relevant information.
+
+2. **Pass 2 — Focused extraction.** Each discovered item gets a targeted extraction call with a type-specific prompt (decision vs. constraint vs. principle). Runs in parallel (up to 5 concurrent). Includes validation and one automatic retry.
+
+### What comes out
+
+Each extracted item produces section-level chunks: context, decision/constraint/principle, consequences, and (for decisions) rejected alternatives. Section-level chunking means the retriever surfaces the exact section most relevant to the incoming code change — including the rejected alternatives that catch "but what if we tried X again?" moments.
+
+### Preprocessing
+
+Before extraction, raw content passes through a preprocessor:
+- HTML → clean markdown (tables preserved as markdown tables, images → `[Image: alt_text]` placeholders)
+- Encoding normalization (BOM, CRLF)
+- Headingless documents get synthetic section headings so Pass 1 can reference them
 
 ---
 
-## Stack
+## Corpus health
 
-- **Python 3.11** + **FastAPI** + **uvicorn**
-- **MCP Python SDK** for Model Context Protocol (streamable HTTP + stdio)
-- **LiteLLM** for unified LLM interface (model string routes to any provider)
-- **Qdrant** for vector database with dense + BM25 sparse search
-- **httpx** for async HTTP (GitHub API and Telegram)
-- **pydantic-settings** for typed configuration with `.env` support
-- Deployed on **Railway** (server) + **Qdrant Cloud** (vector store)
+After bulk ingestion, run the health check to surface any overlapping items that may need resolution:
+
+```bash
+python scripts/check_health.py
+```
+
+Output shows items with overlapping `(domain, services)` coverage, sorted by date, with resolution suggestions:
+
+```
+⚠️  Overlap area: domain=security, services=auth-service
+   2 items govern this area:
+   - [adr-005] Use OAuth2 for third-party auth (2025-08-01) [decision]
+   - [adr-001] Use JWT for stateless authentication (2024-03-15) [decision]
+   → Suggestion: 'adr-005' is newest. Consider superseding older items:
+     update_item_status(doc_id='adr-001', new_status='superseded')
+
+✅ No other overlaps found.
+```
 
 ---
 
@@ -216,7 +336,16 @@ docker run -d -p 6333:6333 \
 cp .env.example .env
 ```
 
-Fill in your API keys and tokens. See `.env.example` for all available options.
+Minimum required variables:
+
+```bash
+OPENAI_API_KEY=sk-...
+GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_SECRET=...
+QDRANT_URL=http://localhost:6333
+```
+
+See `.env.example` for all options including Telegram alerts, Confluence/Jira ingestion, and model selection.
 
 ### 4. Write your ADRs
 
@@ -243,7 +372,7 @@ What was decided.
 Tradeoffs accepted.
 
 ## Rejected Alternatives
-What was ruled out and why. This is the most important section.
+What was ruled out and why. This section drives "refused and explained" behavior in coding agents.
 ```
 
 Valid `constraint_type` values: `security`, `compliance`, `performance`, `scalability`, `data_model`, `operational`
@@ -251,33 +380,37 @@ Valid `constraint_type` values: `security`, `compliance`, `performance`, `scalab
 ### 5. Ingest the corpus
 
 ```bash
-python -m scripts.run_ingest
+# Local ADR files + Confluence/Jira if configured
+python scripts/run_ingest.py
 ```
 
-### 6. Ingest existing rules files (optional)
+Or ingest any document via the MCP tool from your coding agent:
 
-If your project already has a CLAUDE.md, .cursorrules, AGENTS.md, or similar file, you can extract the architectural decisions from it:
+```
+Call ingest_document with the content of your Confluence page, design doc, or RFC.
+```
+
+### 6. Check corpus health (after bulk ingestion)
 
 ```bash
-# Ingest a specific file
-python -m scripts.ingest_rules --file path/to/CLAUDE.md
-
-# Auto-discover rules files in a project directory
-python -m scripts.ingest_rules --project /path/to/your/project
+python scripts/check_health.py
 ```
-
-This uses an LLM to separate architectural decisions from code style and setup instructions. Only the architectural decisions are added to the corpus.
 
 ### 7. Connect your coding agent
 
-**Claude Code (remote, uses the deployed server):**
+**Claude Code (remote — uses the deployed server):**
 ```bash
-claude mcp add --transport http arch-conscience https://your-railway-url.up.railway.app/mcp/
+claude mcp add --transport http arch-conscience \
+  https://your-railway-url.up.railway.app/mcp/
 ```
 
-**Claude Code (local, runs MCP server on your machine):**
+**Claude Code (local — runs MCP server on your machine):**
 ```bash
-claude mcp add-json arch-conscience '{"command":"/path/to/arch-conscience/.venv/bin/python","args":["-m","app.mcp_server"],"cwd":"/path/to/arch-conscience"}'
+claude mcp add-json arch-conscience '{
+  "command": "/path/to/.venv/bin/python",
+  "args": ["-m", "app.mcp_server"],
+  "cwd": "/path/to/arch-conscience"
+}'
 ```
 
 ### 8. Start the webhook server
@@ -303,41 +436,43 @@ Active:        ✅
 ## Testing
 
 ```bash
-# Config and validation tests
-pytest tests/test_smoke.py -v
+# All tests
+pytest
 
-# Full pipeline + webhook + MCP + rules bridge tests
-pytest tests/test_e2e.py -v
-pytest tests/test_mcp.py -v
-pytest tests/test_rules_bridge.py -v
+# By module
+pytest tests/test_smoke.py -v          # config + Qdrant connection (10 tests)
+pytest tests/test_e2e.py -v            # pipeline + webhook + notifications (15 tests)
+pytest tests/test_mcp.py -v            # MCP tools + format detection (24 tests)
+pytest tests/test_rules_bridge.py -v   # rules extraction (11 tests)
+pytest tests/test_preprocess.py -v     # HTML conversion + preprocessing (19 tests)
+pytest tests/test_extract.py -v        # two-pass extraction pipeline (16 tests)
 ```
 
 ### Manual simulation
 
 ```bash
-# Simulate a PR that violates ADR-001
-python -m scripts.simulate_pr
+# Simulate a PR that reintroduces session cookies against ADR-001
+python scripts/simulate_pr.py
 
-# Test MCP tools interactively
+# Interactive MCP tool testing
 mcp dev app/mcp_server.py
 ```
 
 ---
 
-## What an alert looks like
-
-When a PR contradicts a documented decision:
+## What a PR alert looks like
 
 ```
 🔴 Architectural gap detected (adr-001)
 
-PR #42 may reintroduce session cookies. ADR-001 requires
-stateless JWT auth for GDPR compliance.
+PR #42 may reintroduce session cookies — ADR-001 requires
+stateless JWT auth for security.
 
 ADR-001 mandates JWT for stateless authentication due to security
 and scalability concerns. Session cookies were rejected as they
 introduce a centralised session store and conflict with GDPR
-requirements. This PR contradicts that decision.
+requirements. This PR contradicts that decision by implementing
+session cookies. See doc_id: adr-001.
 
 PR: https://github.com/org/repo/pull/42
 Author: @engineer
@@ -347,99 +482,130 @@ Severity: high
 
 ---
 
+## Stack
+
+- **Python 3.11** + **FastAPI** + **uvicorn**
+- **MCP Python SDK** — streamable HTTP transport + stdio for local use
+- **LiteLLM 1.82.6** — unified LLM interface (pinned; 1.82.7/1.82.8 compromised in supply chain attack 2026-03-24)
+- **Qdrant** — vector database with dense + BM25 sparse search configured
+- **markdownify** — HTML→markdown conversion with table preservation
+- **httpx** — async HTTP (GitHub API, Telegram)
+- **pydantic-settings** — typed config with `.env` support
+- Deployed on **Railway** + **Qdrant Cloud**
+
+---
+
 ## Project structure
 
 ```
 arch-conscience/
-├── adrs/                    Local ADR markdown files
+├── adrs/
+│   └── adr-001.md               Sample ADR (JWT for stateless auth)
 ├── app/
-│   ├── config.py            Pydantic settings + startup validation
+│   ├── config.py                Pydantic settings + startup validation
 │   ├── llm/
-│   │   ├── base.py          Data types (Message, CompletionResult)
-│   │   └── provider.py      LiteLLM wrapper (complete, embed)
-│   ├── corpus.py            Qdrant wrapper (upsert, query, stats)
-│   ├── detect.py            Two-stage gap detection pipeline
-│   ├── router.py            GitHub payload to pipeline payload
-│   ├── notify.py            Telegram alert dispatch
-│   ├── ingest.py            ADR / Confluence / Jira ingestion
-│   ├── gap_log.py           Corpus gap signal logger (JSONL)
-│   ├── adr_drafter.py       LLM-powered ADR draft generator
-│   ├── rules_bridge.py      Extract decisions from CLAUDE.md/.cursorrules/AGENTS.md
-│   ├── mcp_server.py        MCP server (get_architectural_context, draft_adr, ingest_rules_file)
-│   └── main.py              FastAPI server (webhook + MCP mount)
+│   │   ├── base.py              Data types (Message, CompletionResult)
+│   │   └── provider.py          LiteLLM wrapper (complete, embed)
+│   ├── corpus.py                Qdrant wrapper (upsert, query, conflict
+│   │                              resolution, update_payload, find_overlapping)
+│   ├── detect.py                Two-stage knowledge-type-aware detection pipeline
+│   ├── router.py                GitHub payload → PipelinePayload
+│   ├── notify.py                Telegram alert dispatch
+│   ├── ingest.py                ADR / Confluence / Jira ingestion
+│   ├── gap_log.py               Corpus gap signal logger (JSONL)
+│   ├── adr_drafter.py           LLM-powered ADR draft generator
+│   ├── rules_bridge.py          Extract decisions from rules files
+│   ├── extract.py               Two-pass LLM extraction pipeline
+│   ├── preprocess.py            HTML→markdown, encoding, synthetic headings
+│   ├── format_detect.py         Document format detection and routing
+│   ├── mcp_server.py            MCP server (4 tools + 1 resource)
+│   └── main.py                  FastAPI server (webhook + MCP mount)
 ├── scripts/
-│   ├── run_ingest.py        CLI: ingest ADRs into Qdrant
-│   ├── simulate_pr.py       CLI: simulate a PR through the pipeline
-│   └── ingest_rules.py      CLI: extract decisions from rules files
+│   ├── run_ingest.py            CLI: ingest ADRs into Qdrant
+│   ├── simulate_pr.py           CLI: simulate PR detection
+│   ├── ingest_rules.py          CLI: extract decisions from rules files
+│   └── check_health.py          CLI: corpus health check for overlaps
 ├── tests/
-│   ├── test_smoke.py        Config + Qdrant connection tests
-│   ├── test_e2e.py          Full pipeline + webhook tests
-│   ├── test_mcp.py          MCP tool tests
-│   └── test_rules_bridge.py Rules file extraction + ingestion tests
+│   ├── conftest.py              Shared fixtures
+│   ├── test_smoke.py            Config + Qdrant connection
+│   ├── test_e2e.py              Full pipeline + webhook + resolution
+│   ├── test_mcp.py              MCP tools + format detection
+│   ├── test_rules_bridge.py     Rules file extraction
+│   ├── test_preprocess.py       HTML conversion + preprocessing
+│   └── test_extract.py          Two-pass extraction pipeline
 ├── pyproject.toml
 ├── requirements.txt
-├── Procfile                 Railway deployment
-└── runtime.txt              Python version for Railway
+├── Procfile                     Railway: web: uvicorn app.main:app
+└── runtime.txt                  Python 3.11.9
 ```
 
 ---
 
 ## Architecture decisions
 
+### Why three knowledge types instead of one
+
+Constraints, decisions, and principles warrant fundamentally different responses — a constraint violation is a hard stop, a decision contradiction should explain *why* the alternative was rejected, and a principle deviation is worth flagging but not blocking. Collapsing all three into a single "violated/not violated" signal loses that nuance and makes the agent either too aggressive or too permissive.
+
 ### Why MCP for agent integration
+
 The Model Context Protocol is the standard for connecting AI coding agents to external tools. A single MCP server makes arch-conscience available to Claude Code, Cursor, Copilot, and any future agent that supports the protocol, without building separate integrations for each.
 
 ### Why two-stage detection pipeline
+
 A single "does this violate any ADR?" prompt hallucinates. Stage 1 (cheap model) filters retrieved chunks for relevance before the expensive Stage 2 call. On a busy repo, most PRs have no relevant chunks and Stage 2 never fires.
 
-### Why section-level ADR chunking
-ADRs chunked at section level rather than by token count. The "Rejected Alternatives" section records why an approach was ruled out. Section-level chunking means the retriever surfaces the exact rejection rationale directly.
+### Why section-level chunking
 
-### Why no LangChain / LlamaIndex
-The pipeline, confidence gate, section-level chunking, and hybrid retrieval are all custom enough that framework abstractions fight you rather than help. When Stage 2 misbehaves, you need to see the exact messages array.
+ADRs and normalizer output are chunked by section, not by token count. The "Rejected Alternatives" section records why an approach was ruled out. Section-level chunking means the retriever surfaces the exact rejection rationale — directly enabling "I see you're reintroducing X, which was explicitly rejected because Y" responses.
 
-### Why LiteLLM for provider abstraction
-LiteLLM handles provider routing, response normalization, and retries without hiding the messages array. Switching from OpenAI to Anthropic is a one-line `.env` change.
+### Why two-pass extraction instead of one LLM call
+
+Pass 1 produces a manifest (titles, types, relevant sections) without extracting full content. Pass 2 uses that manifest as a targeting guide, with type-specific prompts per item. This avoids the "kitchen sink" problem where a single extraction call produces a large undifferentiated blob. Pass 2 runs in parallel under a semaphore (5 concurrent at a time), so a 20-item document processes in four batches rather than sequentially.
 
 ### Why the false positive guard
-Alert fatigue kills adoption faster than missed detections. Additive changes are never flagged. Only genuine contradictions fire alerts.
 
-### Why LLM-based rules file extraction
-Most teams already have rules files (CLAUDE.md, .cursorrules, AGENTS.md) full of architectural constraints mixed with code style. Rather than asking teams to rewrite everything as ADRs, the rules bridge uses an LLM to separate architectural decisions from style rules and indexes only what matters. This lowers the adoption barrier from "write ADRs in our format" to "point us at what you already have."
+Alert fatigue kills adoption faster than missed detections. Additive changes are never flagged. The Stage 2 prompt includes an explicit "false positive guard" step — does the change override an existing constraint, or does it add something new alongside existing patterns? If additive, no gap.
+
+### Why no LangChain / LlamaIndex
+
+The pipeline, confidence gate, section-level chunking, and query-time conflict resolution are all custom enough that framework abstractions fight you rather than help. When Stage 2 misbehaves, you need to see the exact messages array.
 
 ---
 
 ## Confluence and Jira ingestion
 
-Add these to your `.env` to ingest from Confluence and Jira:
+Confluence pages must carry the `architecture-decision` label and Jira epics must carry the `arch-decision` label to be picked up during ingestion. Add these to your `.env`:
 
 ```bash
 CONFLUENCE_BASE_URL=https://yourorg.atlassian.net
 CONFLUENCE_TOKEN=your_atlassian_api_token
-CONFLUENCE_SPACE_KEY=ENG
+CONFLUENCE_SPACE_KEY=ENG          # space to scan
 
 JIRA_BASE_URL=https://yourorg.atlassian.net
 JIRA_TOKEN=your_atlassian_api_token
 ```
 
+Then run `python scripts/run_ingest.py` — it will pick up ADRs, Confluence pages, and Jira epics in one pass. For one-off documents (design docs, RFCs, Notion exports), use `ingest_document` via the MCP tool instead.
+
 ---
 
 ## Roadmap
 
-- Auto-ingest: automatically re-ingest corpus when ADR files change
-- ADR delivery: draft_adr opens a GitHub PR with the ADR file for team review
-- GitHub App: one install covers the whole org, multi-repo support
-- Post-merge conformance scanning: detect gradual architectural drift
-- Decision lifecycle: detect when ADRs are being consistently violated and suggest superseding them
-- Multi-source context for ADR drafting: gather context from Jira, Slack, PR discussions, and codebase analysis
-- Format-agnostic ingestion: LLM normalization for Confluence pages, Notion docs, and free-form design documents
-- Notion integration: ingest architectural decisions from Notion workspaces
+- **Notion integration** — ingest from Notion workspaces
+- **Large document splitting** — split on top-level headings for docs exceeding context window
+- **Auto-ingest** — re-ingest corpus when source documents change
+- **Multi-tenancy** — per-tenant corpus isolation, API key auth on MCP server
+- **GitHub App** — one install covers the whole org, multi-repo support
+- **Slack channel routing** — per-team alert routing using the `owners` field
+- **Post-merge conformance scanning** — detect gradual architectural drift
+- **Decision lifecycle management** — surface items that are consistently violated, suggest superseding
 
 ---
 
 ## Background
 
-Built as a portfolio project exploring agentic RAG systems, AI-native developer tools, and the Model Context Protocol. The self-healing corpus gap signal connects to ongoing research into automated detection and remediation of knowledge base degradation in production RAG pipelines.
+Built as a portfolio project exploring agentic RAG systems, AI-native developer tools, and the Model Context Protocol. The evolution from "ADR enforcement tool" to "architectural knowledge layer" reflects a broader realization: the addressable market for "teams that write ADRs" is tiny. The market for "engineering teams that have ever written down an architectural thought anywhere" is every engineering team.
 
 ---
 
