@@ -19,6 +19,7 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.corpus import ChunkRecord, ensure_collection, upsert
+from app.preprocess import preprocess as preprocess_content
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +272,7 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
 
     for page in data.get("results", []):
         html = page.get("body", {}).get("storage", {}).get("value", "")
-        text = _strip_html(html)
+        text = preprocess_content(html)
         if not text:
             continue
 
@@ -359,14 +360,6 @@ async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _strip_html(html: str) -> str:
-    """Remove HTML tags and decode common entities."""
-    text = re.sub(r"<[^>]+>", " ", html)
-    for entity, char in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")]:
-        text = text.replace(entity, char)
-    return re.sub(r"\s+", " ", text).strip()
 
 
 def _chunk_by_size(

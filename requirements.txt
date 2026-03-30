@@ -6,3 +6,4 @@ pydantic-settings>=2.0
 qdrant-client>=1.11.0
 litellm==1.82.6  # pinned — versions 1.82.7 and 1.82.8 were compromised (supply chain attack, 2026-03-24)
 mcp[cli]>=1.2.0
+markdownify>=0.14.1

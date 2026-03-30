@@ -286,15 +286,15 @@ class TestExtractDecisions:
         assert rabbitmq_chunk.domain == "scalability"
 
 
-class TestIngestRulesTool:
-    """Tests for the ingest_rules_file MCP tool."""
+class TestIngestDocumentWithRules:
+    """Tests for the ingest_document MCP tool with rules files."""
 
     @pytest.mark.asyncio
-    async def test_tool_extracts_and_upserts(
+    async def test_tool_extracts_and_upserts_rules(
         self, test_settings, llm_extraction_response
     ):
-        """MCP tool extracts decisions and upserts them to corpus."""
-        from app.mcp_server import ingest_rules_file
+        """ingest_document detects rules file and extracts decisions."""
+        from app.mcp_server import ingest_document
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
              patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
@@ -303,14 +303,16 @@ class TestIngestRulesTool:
                  new_callable=AsyncMock,
                  return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
              ), \
-             patch("app.corpus.upsert", new_callable=AsyncMock) as mock_upsert:
+             patch("app.mcp_server.upsert", new_callable=AsyncMock) as mock_upsert, \
+             patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
 
-            result = json.loads(await ingest_rules_file(
+            result = json.loads(await ingest_document(
                 content="# Architecture\n- Use JWT\n- Use RabbitMQ",
                 filename="CLAUDE.md",
             ))
 
-        assert result["decisions_extracted"] == 3
+        assert result["format_detected"] == "rules_file"
+        assert result["items_extracted"] == 3
         assert result["chunks_indexed"] == 5
         assert mock_upsert.called
 
@@ -318,8 +320,8 @@ class TestIngestRulesTool:
     async def test_tool_returns_zero_when_no_decisions(
         self, test_settings, llm_empty_response
     ):
-        """MCP tool returns helpful message when no decisions found."""
-        from app.mcp_server import ingest_rules_file
+        """ingest_document returns helpful message when no decisions found."""
+        from app.mcp_server import ingest_document
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
              patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
@@ -329,11 +331,11 @@ class TestIngestRulesTool:
                  return_value=CompletionResult(content=llm_empty_response, model="gpt-4o"),
              ):
 
-            result = json.loads(await ingest_rules_file(
+            result = json.loads(await ingest_document(
                 content="# Code Style\n- 2 spaces\n- Named exports",
                 filename=".cursorrules",
             ))
 
-        assert result["decisions_extracted"] == 0
+        assert result["items_extracted"] == 0
         assert result["chunks_indexed"] == 0
-        assert "No architectural decisions" in result["message"]
+        assert "No architectural knowledge" in result["message"]

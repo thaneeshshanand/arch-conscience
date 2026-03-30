@@ -10,3 +10,5 @@ dist/
 build/
 HANDOFF.md
 projectdocs/
+scratchpad.md
+.vscode/

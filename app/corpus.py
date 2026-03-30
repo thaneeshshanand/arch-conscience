@@ -317,6 +317,126 @@ async def query(
     return scored
 
 
+# ── Update ───────────────────────────────────────────────────────
+
+
+async def update_payload(
+    doc_id: str,
+    payload_updates: dict,
+    settings: Settings | None = None,
+) -> int:
+    """Update payload fields on all chunks matching a doc_id.
+
+    Uses Qdrant's set_payload API for in-place updates without
+    re-embedding. Primary use: status updates for conflict resolution.
+
+    Args:
+        doc_id: Document ID to match (e.g. "adr-001").
+        payload_updates: Dict of field names to new values.
+        settings: Optional settings override.
+
+    Returns:
+        Number of points updated.
+    """
+    s = settings or get_settings()
+    client = _get_client(s)
+
+    response = await client.scroll(
+        collection_name=s.QDRANT_COLLECTION,
+        scroll_filter=Filter(
+            must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))],
+        ),
+        limit=100,
+        with_payload=False,
+    )
+
+    points = response[0]
+    if not points:
+        return 0
+
+    point_ids = [p.id for p in points]
+
+    await client.set_payload(
+        collection_name=s.QDRANT_COLLECTION,
+        payload=payload_updates,
+        points=point_ids,
+    )
+
+    logger.info("Updated %d points for doc_id=%s: %s", len(point_ids), doc_id, payload_updates)
+    return len(point_ids)
+
+
+async def find_overlapping(
+    domain: str,
+    affected_services: list[str],
+    status: str = "active",
+    settings: Settings | None = None,
+) -> list[ScoredChunk]:
+    """Find existing active items with overlapping domain and services.
+
+    Used for conflict detection at ingestion time. Returns decision-type
+    chunks that share the same domain and overlap in affected_services.
+
+    Args:
+        domain: Domain to check (e.g. "security").
+        affected_services: Services to check overlap with.
+        status: Status filter (default "active").
+        settings: Optional settings override.
+
+    Returns:
+        List of overlapping chunks as ScoredChunks (score=1.0).
+    """
+    s = settings or get_settings()
+    client = _get_client(s)
+
+    must_clauses = [
+        FieldCondition(key="status", match=MatchValue(value=status)),
+        FieldCondition(key="domain", match=MatchValue(value=domain)),
+    ]
+
+    if affected_services:
+        should_clauses = [
+            FieldCondition(key="affected_services", match=MatchAny(any=affected_services)),
+            IsEmptyCondition(is_empty=PayloadField(key="affected_services")),
+        ]
+        scroll_filter = Filter(must=must_clauses, should=should_clauses)
+    else:
+        scroll_filter = Filter(must=must_clauses)
+
+    response = await client.scroll(
+        collection_name=s.QDRANT_COLLECTION,
+        scroll_filter=scroll_filter,
+        limit=50,
+        with_payload=True,
+    )
+
+    scored: list[ScoredChunk] = []
+    for r in response[0]:
+        p = r.payload or {}
+        chunk = ChunkRecord(
+            id=p.get("doc_id", "") + "-" + p.get("section_type", ""),
+            text=p.get("text", ""),
+            knowledge_type=p.get("knowledge_type", "decision"),
+            section_type=p.get("section_type", ""),
+            source_type=p.get("source_type", ""),
+            doc_id=p.get("doc_id", ""),
+            author=p.get("author", "unknown"),
+            affected_services=p.get("affected_services", []),
+            domain=p.get("domain", "operational"),
+            status=p.get("status", "active"),
+            date=p.get("date", ""),
+            source_url=p.get("source_url", ""),
+            source_title=p.get("source_title", ""),
+            ingested_at=p.get("ingested_at", ""),
+            owners=p.get("owners", []),
+            tags=p.get("tags", []),
+            source_last_modified=p.get("source_last_modified", ""),
+        )
+        scored.append(ScoredChunk(chunk=chunk, score=1.0, point_id=str(r.id)))
+
+    return scored
+
+
 # ── Stats ────────────────────────────────────────────────────────────
 
 

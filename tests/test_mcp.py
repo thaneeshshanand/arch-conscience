@@ -414,3 +414,173 @@ class TestDraftAdr:
         call_args = mock_drafter.call_args
         user_msg = call_args[0][0][1].content
         assert "adr-001" in user_msg
+
+
+class TestIngestDocument:
+    """Tests for the ingest_document MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_detects_adr_format(self, test_settings):
+        """ADR with frontmatter routes to ADR parser."""
+        from app.mcp_server import ingest_document
+
+        adr_content = (
+            "---\n"
+            "id: adr-099\n"
+            "title: Test ADR\n"
+            "status: active\n"
+            "date: 2026-03-29\n"
+            "services: [test-service]\n"
+            "constraint_type: operational\n"
+            "author: test\n"
+            "---\n\n"
+            "## Context\n\nNeed to decide something.\n\n"
+            "## Decision\n\nWe decided X.\n"
+        )
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.upsert", new_callable=AsyncMock), \
+             patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
+
+            result = json.loads(await ingest_document(
+                content=adr_content,
+                filename="adr-099.md",
+            ))
+
+        assert result["format_detected"] == "adr"
+        assert result["items_extracted"] >= 1
+        assert result["chunks_indexed"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_detects_rules_format(self, test_settings):
+        """Known rules filename routes to rules bridge."""
+        from app.mcp_server import ingest_document
+
+        rules_response = json.dumps({"decisions": [{
+            "title": "Use Postgres",
+            "decision": "All data in Postgres.",
+            "context": "", "rejected": "",
+            "services": [], "domain": "data_model",
+        }]})
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.rules_bridge.complete", new_callable=AsyncMock,
+                   return_value=CompletionResult(content=rules_response, model="gpt-4o")), \
+             patch("app.mcp_server.upsert", new_callable=AsyncMock), \
+             patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
+
+            result = json.loads(await ingest_document(
+                content="# Architecture\nUse Postgres for everything.",
+                filename="CLAUDE.md",
+            ))
+
+        assert result["format_detected"] == "rules_file"
+
+    @pytest.mark.asyncio
+    async def test_detects_generic_format(self, test_settings):
+        """Non-ADR, non-rules document routes to normalizer."""
+        from app.mcp_server import ingest_document
+        from app.normalize import ExtractionResult
+        from app.corpus import ChunkRecord
+
+        mock_chunks = [ChunkRecord(
+            id="norm-doc-1-decision",
+            text="Decision: Use X\nSection: Decision\n\nWe chose X.",
+            knowledge_type="decision", section_type="decision",
+            source_type="design_doc", doc_id="norm-doc-1",
+            domain="operational", source_title="Use X",
+        )]
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.normalize_document", new_callable=AsyncMock,
+                   return_value=ExtractionResult(chunks=mock_chunks, items_discovered=1, items_extracted=1)), \
+             patch("app.mcp_server.upsert", new_callable=AsyncMock), \
+             patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
+
+            result = json.loads(await ingest_document(
+                content="## Architecture\n\nWe chose X over Y for reasons.",
+                filename="design-doc.md",
+            ))
+
+        assert result["format_detected"] == "generic"
+        assert result["items_extracted"] == 1
+
+
+class TestUpdateItemStatus:
+    """Tests for the update_item_status MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_updates_status(self, test_settings):
+        """update_item_status changes status on matching chunks."""
+        from app.mcp_server import update_item_status
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.update_payload", new_callable=AsyncMock, return_value=4):
+
+            result = json.loads(await update_item_status(
+                doc_id="adr-001",
+                new_status="superseded",
+                reason="Replaced by adr-005",
+            ))
+
+        assert result["doc_id"] == "adr-001"
+        assert result["new_status"] == "superseded"
+        assert result["chunks_updated"] == 4
+        assert result["reason"] == "Replaced by adr-005"
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_status(self, test_settings):
+        """update_item_status rejects invalid status values."""
+        from app.mcp_server import update_item_status
+
+        result = json.loads(await update_item_status(
+            doc_id="adr-001",
+            new_status="invalid",
+        ))
+
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_handles_no_matching_doc(self, test_settings):
+        """update_item_status returns zero when doc_id not found."""
+        from app.mcp_server import update_item_status
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.update_payload", new_callable=AsyncMock, return_value=0):
+
+            result = json.loads(await update_item_status(
+                doc_id="nonexistent",
+                new_status="deprecated",
+            ))
+
+        assert result["updated"] == 0
+
+
+class TestFormatDetection:
+    """Tests for document format detection."""
+
+    def test_adr_frontmatter_detected(self):
+        from app.format_detect import detect_format, DocumentFormat
+        content = "---\nid: adr-001\ntitle: Test\nstatus: active\nservices: [svc]\n---\n\n## Decision\n"
+        assert detect_format(content) == DocumentFormat.ADR
+
+    def test_rules_file_detected(self):
+        from app.format_detect import detect_format, DocumentFormat
+        assert detect_format("# Rules", "CLAUDE.md") == DocumentFormat.RULES_FILE
+        assert detect_format("# Rules", ".cursorrules") == DocumentFormat.RULES_FILE
+        assert detect_format("# Rules", "AGENTS.md") == DocumentFormat.RULES_FILE
+
+    def test_generic_fallback(self):
+        from app.format_detect import detect_format, DocumentFormat
+        assert detect_format("## Design\nSome design doc.") == DocumentFormat.GENERIC
+        assert detect_format("## Design", "design.md") == DocumentFormat.GENERIC
+
+    def test_frontmatter_without_adr_fields_is_generic(self):
+        from app.format_detect import detect_format, DocumentFormat
+        content = "---\nauthor: someone\ndate: 2026-01-01\n---\n\nSome doc."
+        assert detect_format(content) == DocumentFormat.GENERIC
