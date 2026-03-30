@@ -113,7 +113,7 @@ async def _send_telegram(message: str, settings: Settings) -> None:
         logger.info(message)
         return
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={

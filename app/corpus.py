@@ -153,6 +153,8 @@ async def ensure_collection(settings: Settings | None = None) -> None:
         ("affected_services", PayloadSchemaType.KEYWORD),
         ("status", PayloadSchemaType.KEYWORD),
         ("domain", PayloadSchemaType.KEYWORD),
+        ("section_type", PayloadSchemaType.KEYWORD),
+        ("doc_id", PayloadSchemaType.KEYWORD),
     ]:
         await client.create_payload_index(
             collection_name=collection,
