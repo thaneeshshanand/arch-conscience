@@ -33,7 +33,7 @@ from app.config import get_settings
 from app.corpus import ensure_collection, find_overlapping, query, stats, update_payload, upsert
 from app.adr_drafter import draft_adr as _draft_adr
 from app.format_detect import DocumentFormat, detect_format
-from app.normalize import normalize_document
+from app.extract import extract_from_document
 from app.rules_bridge import extract_decisions_from_rules
 
 logger = logging.getLogger(__name__)
@@ -514,7 +514,7 @@ async def _ingest_generic(
     content: str, filename: str, source_url: str, source_type: str, settings,
 ) -> list:
     """Ingest a generic document using the two-pass normalizer."""
-    result = await normalize_document(
+    result = await extract_from_document(
         content,
         filename=filename,
         source_url=source_url,

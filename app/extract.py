@@ -56,7 +56,7 @@ class ExtractionResult:
 # ── Public API ───────────────────────────────────────────────────────
 
 
-async def normalize_document(
+async def extract_from_document(
     content: str,
     *,
     filename: str = "",
@@ -138,7 +138,7 @@ async def normalize_document(
             result.items_failed.append(manifest[i].title)
 
     logger.info(
-        "Normalized %s: %d discovered, %d extracted, %d failed, %d chunks",
+        "Extracted from %s: %d discovered, %d extracted, %d failed, %d chunks",
         filename, result.items_discovered, result.items_extracted,
         len(result.items_failed), len(result.chunks),
     )

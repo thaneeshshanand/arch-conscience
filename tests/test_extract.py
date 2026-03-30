@@ -1,9 +1,9 @@
-"""Normalizer tests — two-pass extraction pipeline.
+"""Extract pipeline tests — two-pass LLM extraction.
 
 Mocks LLM calls to verify chunk output, validation, and retry logic.
 
 Run with:
-    pytest tests/test_normalize.py -v
+    pytest tests/test_extract.py -v
 """
 
 import json
@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.llm.base import CompletionResult
-from app.normalize import (
+from app.extract import (
     DiscoveredItem,
-    normalize_document,
+    extract_from_document,
     _validate_extraction,
     _build_chunks_from_extraction,
     _extract_relevant_sections,
@@ -117,8 +117,8 @@ class TestNormalizeDocument:
             else:
                 return CompletionResult(content=pass2_constraint_response, model=model)
 
-        with patch("app.normalize.complete", side_effect=mock_complete):
-            result = await normalize_document(
+        with patch("app.extract.complete", side_effect=mock_complete):
+            result = await extract_from_document(
                 sample_document,
                 filename="design.md",
                 source_type="design_doc",
@@ -157,11 +157,11 @@ class TestNormalizeDocument:
     ):
         """Empty document returns no chunks."""
         with patch(
-            "app.normalize.complete",
+            "app.extract.complete",
             new_callable=AsyncMock,
             return_value=CompletionResult(content=pass1_empty_response, model="gpt-4o"),
         ):
-            result = await normalize_document(
+            result = await extract_from_document(
                 "# Code Style\n\nUse 2-space indent.",
                 filename="style.md",
                 settings=test_settings,
@@ -196,8 +196,8 @@ class TestNormalizeDocument:
                     "domain": "security",
                 }), model=model)
 
-        with patch("app.normalize.complete", side_effect=mock_complete):
-            result = await normalize_document(
+        with patch("app.extract.complete", side_effect=mock_complete):
+            result = await extract_from_document(
                 "## Arch\n\nSome content about decisions.",
                 filename="doc.md",
                 settings=test_settings,
@@ -210,7 +210,7 @@ class TestNormalizeDocument:
     @pytest.mark.asyncio
     async def test_empty_content_returns_empty(self, test_settings):
         """Blank content returns immediately."""
-        result = await normalize_document("", filename="empty.md", settings=test_settings)
+        result = await extract_from_document("", filename="empty.md", settings=test_settings)
         assert result.chunks == []
         assert result.items_discovered == 0
 

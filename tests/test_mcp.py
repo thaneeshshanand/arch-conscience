@@ -482,7 +482,7 @@ class TestIngestDocument:
     async def test_detects_generic_format(self, test_settings):
         """Non-ADR, non-rules document routes to normalizer."""
         from app.mcp_server import ingest_document
-        from app.normalize import ExtractionResult
+        from app.extract import ExtractionResult
         from app.corpus import ChunkRecord
 
         mock_chunks = [ChunkRecord(
@@ -495,7 +495,7 @@ class TestIngestDocument:
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
              patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
-             patch("app.mcp_server.normalize_document", new_callable=AsyncMock,
+             patch("app.mcp_server.extract_from_document", new_callable=AsyncMock,
                    return_value=ExtractionResult(chunks=mock_chunks, items_discovered=1, items_extracted=1)), \
              patch("app.mcp_server.upsert", new_callable=AsyncMock), \
              patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
