@@ -114,7 +114,7 @@ async def main():
         settings=settings,
     )
 
-    print("✅ Alert dispatched — check your Telegram bot!")
+    print(f"✅ Alert dispatched via {settings.ALERT_CHANNEL}!")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,9 @@ arch-conscience closes that gap.
 
 **Prevents violations at code-generation time.** AI coding agents (Claude Code, Cursor, Copilot) call arch-conscience via MCP before writing code. The agent's behavior adapts to the type of knowledge being violated — hard constraints trigger an outright refusal, decisions with rejected alternatives trigger a refusal with explanation, and principles flag a deviation but let the developer proceed.
 
-**Catches violations at PR time.** A webhook pipeline watches every PR, retrieves relevant knowledge items, runs a two-stage detection pipeline with knowledge-type-aware reasoning, and alerts the responsible engineer via Telegram when a genuine contradiction is found.
+**Catches violations at PR time.** A webhook pipeline watches every PR, retrieves relevant knowledge items, runs a two-stage detection pipeline with knowledge-type-aware reasoning, and alerts the responsible engineer via Telegram or Slack when a genuine contradiction is found.
+
+**Routes alerts to the right team.** Slack alerts support per-service channel routing — auth violations go to `#arch-auth`, payments violations go to `#arch-payments`. Falls back to a default channel for unmapped services.
 
 **Ingests your existing documentation.** arch-conscience meets teams where they are. Point it at an ADR directory, a CLAUDE.md or .cursorrules file, a Confluence page, an RFC, or any other document where your team has written down an architectural thought. A two-pass LLM pipeline extracts the decisions, constraints, and principles automatically — no reformatting required.
 
@@ -170,7 +172,8 @@ GitHub PR opened
   Stage 2: gap detection (gpt-4o, chain-of-thought)
        │ classifies: Violating / Contradicting / Reintroducing / Deviating
        ▼
-  Alert dispatched via Telegram
+  Alert dispatched via Telegram or Slack
+       │ Slack: per-service channel routing
 ```
 
 ---
@@ -287,6 +290,53 @@ Before extraction, raw content passes through a preprocessor:
 
 ---
 
+## Alert channels
+
+### Telegram
+
+The default channel. Set `ALERT_CHANNEL=telegram` and configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+
+### Slack
+
+Per-service channel routing so the right team sees the right alerts. Set `ALERT_CHANNEL=slack` and configure webhooks:
+
+```bash
+# Default channel — receives alerts for unmapped services
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+
+# Per-service routing (optional) — overrides the default for matched services
+SLACK_CHANNEL_MAP={"auth-service":"https://hooks.slack.com/services/AUTH","payments-service":"https://hooks.slack.com/services/PAY"}
+```
+
+Uses app-based incoming webhooks (create via a [Slack app](https://api.slack.com/apps), not legacy custom integrations).
+
+### What an alert looks like
+
+**Telegram:**
+```
+🔴 Architectural gap detected (adr-001)
+
+PR #42 may reintroduce session cookies — ADR-001 requires
+stateless JWT auth for security.
+
+ADR-001 mandates JWT for stateless authentication due to security
+and scalability concerns. Session cookies were rejected as they
+introduce a centralised session store and conflict with GDPR
+requirements. This PR contradicts that decision by implementing
+session cookies. See doc_id: adr-001.
+
+PR: https://github.com/org/repo/pull/42
+Author: @engineer
+Severity: high
+⚠️ This approach was explicitly rejected in the ADR.
+```
+
+**Slack:**
+
+Same content with mrkdwn formatting — bold fields, clickable PR link, severity emoji, and the rejected-alternative warning.
+
+---
+
 ## Corpus health
 
 After bulk ingestion, run the health check to surface any overlapping items that may need resolution:
@@ -343,6 +393,15 @@ OPENAI_API_KEY=sk-...
 GITHUB_TOKEN=ghp_...
 GITHUB_WEBHOOK_SECRET=...
 QDRANT_URL=http://localhost:6333
+```
+
+For Slack alerts:
+
+```bash
+ALERT_CHANNEL=slack
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+# Optional: per-service channel routing
+SLACK_CHANNEL_MAP={"auth-service":"https://hooks.slack.com/services/AUTH"}
 ```
 
 See `.env.example` for all options including Telegram alerts, Confluence/Jira ingestion, and model selection.
@@ -435,6 +494,8 @@ Active:        ✅
 
 ## Testing
 
+112 automated tests across 8 test files:
+
 ```bash
 # All tests
 pytest
@@ -446,6 +507,7 @@ pytest tests/test_mcp.py -v            # MCP tools + format detection (24 tests)
 pytest tests/test_rules_bridge.py -v   # rules extraction (11 tests)
 pytest tests/test_preprocess.py -v     # HTML conversion + preprocessing (19 tests)
 pytest tests/test_extract.py -v        # two-pass extraction pipeline (16 tests)
+pytest tests/test_notify.py -v         # Slack routing + dispatch (17 tests)
 ```
 
 ### Manual simulation
@@ -460,28 +522,6 @@ mcp dev app/mcp_server.py
 
 ---
 
-## What a PR alert looks like
-
-```
-🔴 Architectural gap detected (adr-001)
-
-PR #42 may reintroduce session cookies — ADR-001 requires
-stateless JWT auth for security.
-
-ADR-001 mandates JWT for stateless authentication due to security
-and scalability concerns. Session cookies were rejected as they
-introduce a centralised session store and conflict with GDPR
-requirements. This PR contradicts that decision by implementing
-session cookies. See doc_id: adr-001.
-
-PR: https://github.com/org/repo/pull/42
-Author: @engineer
-Severity: high
-⚠️ This approach was explicitly rejected in the ADR.
-```
-
----
-
 ## Stack
 
 - **Python 3.11** + **FastAPI** + **uvicorn**
@@ -489,7 +529,7 @@ Severity: high
 - **LiteLLM 1.82.6** — unified LLM interface (pinned; 1.82.7/1.82.8 compromised in supply chain attack 2026-03-24)
 - **Qdrant** — vector database with dense + BM25 sparse search configured
 - **markdownify** — HTML→markdown conversion with table preservation
-- **httpx** — async HTTP (GitHub API, Telegram)
+- **httpx** — async HTTP (GitHub API, Telegram, Slack)
 - **pydantic-settings** — typed config with `.env` support
 - Deployed on **Railway** + **Qdrant Cloud**
 
@@ -532,7 +572,8 @@ arch-conscience/
 │   ├── test_mcp.py              MCP tools + format detection
 │   ├── test_rules_bridge.py     Rules file extraction
 │   ├── test_preprocess.py       HTML conversion + preprocessing
-│   └── test_extract.py          Two-pass extraction pipeline
+│   ├── test_extract.py          Two-pass extraction pipeline
+│   └── test_notify.py           Slack routing + dispatch
 ├── pyproject.toml
 ├── requirements.txt
 ├── Procfile                     Railway: web: uvicorn app.main:app
@@ -592,12 +633,13 @@ Then run `python scripts/run_ingest.py` — it will pick up ADRs, Confluence pag
 
 ## Roadmap
 
+- **Validate Confluence ingestion** against a real instance
 - **Notion integration** — ingest from Notion workspaces
 - **Large document splitting** — split on top-level headings for docs exceeding context window
 - **Auto-ingest** — re-ingest corpus when source documents change
+- **Alert feedback loop** — thumbs up/down on detections
 - **Multi-tenancy** — per-tenant corpus isolation, API key auth on MCP server
 - **GitHub App** — one install covers the whole org, multi-repo support
-- **Slack channel routing** — per-team alert routing using the `owners` field
 - **Post-merge conformance scanning** — detect gradual architectural drift
 - **Decision lifecycle management** — surface items that are consistently violated, suggest superseding
 
