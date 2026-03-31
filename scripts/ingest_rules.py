@@ -2,7 +2,8 @@
 
 Discovers and ingests CLAUDE.md, .cursorrules, AGENTS.md, rules.md,
 and similar files from a project directory. Extracts architectural
-decisions using an LLM and indexes them for enforcement.
+knowledge items (decisions, constraints, principles) using an LLM
+and indexes them for enforcement.
 
 Usage:
     # Discover all known rules files in current directory
@@ -18,6 +19,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+from collections import Counter
 
 from app.config import get_settings
 from app.corpus import ensure_collection, upsert
@@ -53,22 +55,27 @@ async def main():
         chunks = await discover_and_ingest(args.project, settings)
 
     if not chunks:
-        print("\nNo architectural decisions found.")
+        print("\nNo architectural knowledge found.")
         return
 
     await upsert(chunks, settings)
 
     # Summarize
-    decisions = set()
+    doc_ids = set()
+    type_counts: Counter[str] = Counter()
     for c in chunks:
-        decisions.add(c.doc_id)
+        doc_ids.add(c.doc_id)
+        if c.section_type == "decision":
+            type_counts[c.knowledge_type] += 1
 
-    print(f"\nDone. Extracted {len(decisions)} decisions, indexed {len(chunks)} chunks.")
-    print("\nDecisions found:")
+    print(f"\nDone. Extracted {len(doc_ids)} items, indexed {len(chunks)} chunks.")
+    print(f"By type: {', '.join(f'{count} {kt}(s)' for kt, count in type_counts.most_common())}")
+    print("\nItems found:")
     for c in chunks:
         if c.section_type == "decision":
-            title = c.text.split("\n")[0].replace("Rule: ", "")
-            print(f"  - {title} [{c.domain}] -> {', '.join(c.affected_services)}")
+            title = c.source_title or c.text.split("\n")[0]
+            services = ", ".join(c.affected_services) if c.affected_services else "project-wide"
+            print(f"  [{c.knowledge_type}] {title} [{c.domain}] -> {services}")
 
 
 if __name__ == "__main__":

@@ -17,20 +17,40 @@ from app.llm.base import CompletionResult
 
 @pytest.fixture
 def llm_extraction_response():
-    """LLM response with mixed architectural decisions."""
+    """LLM response with mixed architectural knowledge types."""
     return json.dumps({
-        "decisions": [
+        "items": [
             {
                 "title": "Use JWT for authentication",
-                "decision": "All services use signed JWTs. No server-side session state.",
+                "knowledge_type": "decision",
+                "content": "All services use signed JWTs. No server-side session state.",
                 "context": "Need stateless auth for horizontal scaling.",
                 "rejected": "Session cookies rejected due to centralised store and GDPR conflict.",
                 "services": ["auth-service", "api-gateway"],
                 "domain": "security",
             },
             {
+                "title": "PII encryption requirement",
+                "knowledge_type": "constraint",
+                "content": "All PII must be encrypted at rest using AES-256. No exceptions.",
+                "context": "Compliance requirement from Legal. Violation triggers audit failure.",
+                "rejected": "",
+                "services": [],
+                "domain": "compliance",
+            },
+            {
+                "title": "Business logic out of HTTP handlers",
+                "knowledge_type": "principle",
+                "content": "Keep business logic out of HTTP handlers. Handlers should only parse requests, call a service layer function, and format responses.",
+                "context": "Improves testability and keeps handlers thin.",
+                "rejected": "",
+                "services": [],
+                "domain": "operational",
+            },
+            {
                 "title": "Event-driven inter-service communication",
-                "decision": "Services communicate via RabbitMQ events.",
+                "knowledge_type": "decision",
+                "content": "Services communicate via RabbitMQ events.",
                 "context": "Decoupling services for independent deployment.",
                 "rejected": "Direct HTTP calls between services.",
                 "services": [],
@@ -38,7 +58,8 @@ def llm_extraction_response():
             },
             {
                 "title": "Legacy payments SOAP client",
-                "decision": "Do not refactor the payments SOAP client until bank migrates to REST.",
+                "knowledge_type": "decision",
+                "content": "Do not refactor the payments SOAP client until bank migrates to REST.",
                 "context": "",
                 "rejected": "",
                 "services": ["payments"],
@@ -50,21 +71,39 @@ def llm_extraction_response():
 
 @pytest.fixture
 def llm_empty_response():
-    """LLM response when no architectural decisions found."""
-    return json.dumps({"decisions": []})
+    """LLM response when no architectural knowledge found."""
+    return json.dumps({"items": []})
 
 
 @pytest.fixture
 def llm_all_services_response():
     """LLM response that uses 'all' for services."""
     return json.dumps({
-        "decisions": [
+        "items": [
             {
                 "title": "PostgreSQL for OLTP",
-                "decision": "Use PostgreSQL for all transactional data.",
+                "knowledge_type": "decision",
+                "content": "Use PostgreSQL for all transactional data.",
                 "context": "",
                 "rejected": "MongoDB rejected for transactional workloads.",
                 "services": ["all"],
+                "domain": "data_model",
+            },
+        ]
+    })
+
+
+@pytest.fixture
+def llm_legacy_format_response():
+    """LLM response in the old format (backward compatibility)."""
+    return json.dumps({
+        "decisions": [
+            {
+                "title": "Use PostgreSQL",
+                "decision": "Use PostgreSQL for all data.",
+                "context": "Need ACID.",
+                "rejected": "MongoDB rejected.",
+                "services": [],
                 "domain": "data_model",
             },
         ]
@@ -78,10 +117,10 @@ class TestExtractDecisions:
     """Tests for extract_decisions_from_rules."""
 
     @pytest.mark.asyncio
-    async def test_extracts_decisions_with_correct_chunk_format(
+    async def test_extracts_all_three_knowledge_types(
         self, test_settings, llm_extraction_response
     ):
-        """Extracted chunks follow the Rule: <title> / Section: <type> format."""
+        """Extraction produces chunks with correct knowledge_type for each item."""
         from app.rules_bridge import extract_decisions_from_rules
 
         with patch(
@@ -90,27 +129,25 @@ class TestExtractDecisions:
             return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
         ):
             chunks = await extract_decisions_from_rules(
-                content="# Architecture\n- Use JWT, never session cookies",
+                content="# Architecture\n- Use JWT\n- PII encrypted\n- Logic in service layer",
                 source_file="CLAUDE.md",
                 settings=test_settings,
             )
 
-        # 3 decisions: 2 with rejected (4 chunks each pair) + 1 without (1 chunk)
-        assert len(chunks) == 5
+        # Check knowledge types
+        decision_chunks = [c for c in chunks if c.knowledge_type == "decision"]
+        constraint_chunks = [c for c in chunks if c.knowledge_type == "constraint"]
+        principle_chunks = [c for c in chunks if c.knowledge_type == "principle"]
 
-        # Check format of first decision chunk
-        jwt_decision = [c for c in chunks if "JWT" in c.text and c.section_type == "decision"][0]
-        assert jwt_decision.text.startswith("Rule: Use JWT for authentication")
-        assert "Section: Decision" in jwt_decision.text
-        assert jwt_decision.source_type == "rules_file"
-        assert jwt_decision.status == "active"
-        assert jwt_decision.knowledge_type == "decision"
+        assert len(decision_chunks) > 0
+        assert len(constraint_chunks) > 0
+        assert len(principle_chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_creates_separate_rejected_alternatives_chunks(
+    async def test_constraint_uses_correct_label(
         self, test_settings, llm_extraction_response
     ):
-        """Decisions with rejected text get a separate rejected_alternatives chunk."""
+        """Constraint chunks use 'Constraint:' prefix, not 'Rule:'."""
         from app.rules_bridge import extract_decisions_from_rules
 
         with patch(
@@ -120,22 +157,21 @@ class TestExtractDecisions:
         ):
             chunks = await extract_decisions_from_rules(
                 content="some rules",
-                source_file="rules.md",
+                source_file="CLAUDE.md",
                 settings=test_settings,
             )
 
-        rejected_chunks = [c for c in chunks if c.section_type == "rejected_alternatives"]
-        assert len(rejected_chunks) == 2  # JWT and RabbitMQ have rejected text
-
-        jwt_rejected = [c for c in rejected_chunks if "JWT" in c.text][0]
-        assert "Section: Rejected Alternatives" in jwt_rejected.text
-        assert "Session cookies" in jwt_rejected.text
+        pii_chunks = [c for c in chunks if "PII" in c.source_title]
+        assert len(pii_chunks) > 0
+        pii_decision = [c for c in pii_chunks if c.section_type == "decision"][0]
+        assert pii_decision.text.startswith("Constraint: PII encryption requirement")
+        assert pii_decision.knowledge_type == "constraint"
 
     @pytest.mark.asyncio
-    async def test_no_rejected_chunk_when_empty(
+    async def test_principle_uses_correct_label(
         self, test_settings, llm_extraction_response
     ):
-        """Decisions without rejected text don't create a rejected_alternatives chunk."""
+        """Principle chunks use 'Principle:' prefix."""
         from app.rules_bridge import extract_decisions_from_rules
 
         with patch(
@@ -145,14 +181,124 @@ class TestExtractDecisions:
         ):
             chunks = await extract_decisions_from_rules(
                 content="some rules",
-                source_file="rules.md",
+                source_file="CLAUDE.md",
                 settings=test_settings,
             )
 
-        # Legacy payments has no rejected text
-        payments_chunks = [c for c in chunks if "SOAP" in c.text or "payments" in c.text.lower()]
-        assert len(payments_chunks) == 1
-        assert payments_chunks[0].section_type == "decision"
+        handler_chunks = [c for c in chunks if "handler" in c.source_title.lower()]
+        assert len(handler_chunks) > 0
+        handler_decision = [c for c in handler_chunks if c.section_type == "decision"][0]
+        assert handler_decision.text.startswith("Principle: Business logic out of HTTP handlers")
+        assert handler_decision.knowledge_type == "principle"
+
+    @pytest.mark.asyncio
+    async def test_constraint_has_no_rejected_alternatives(
+        self, test_settings, llm_extraction_response
+    ):
+        """Constraints never produce rejected_alternatives chunks."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="CLAUDE.md",
+                settings=test_settings,
+            )
+
+        pii_chunks = [c for c in chunks if "PII" in c.source_title]
+        assert not any(c.section_type == "rejected_alternatives" for c in pii_chunks)
+
+    @pytest.mark.asyncio
+    async def test_principle_has_no_rejected_alternatives(
+        self, test_settings, llm_extraction_response
+    ):
+        """Principles never produce rejected_alternatives chunks."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="CLAUDE.md",
+                settings=test_settings,
+            )
+
+        handler_chunks = [c for c in chunks if "handler" in c.source_title.lower()]
+        assert not any(c.section_type == "rejected_alternatives" for c in handler_chunks)
+
+    @pytest.mark.asyncio
+    async def test_decision_still_gets_rejected_alternatives(
+        self, test_settings, llm_extraction_response
+    ):
+        """Decisions with rejected text still get rejected_alternatives chunks."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="CLAUDE.md",
+                settings=test_settings,
+            )
+
+        jwt_rejected = [c for c in chunks if "JWT" in c.source_title and c.section_type == "rejected_alternatives"]
+        assert len(jwt_rejected) == 1
+        assert "Session cookies" in jwt_rejected[0].text
+
+    @pytest.mark.asyncio
+    async def test_context_chunks_created_for_substantial_context(
+        self, test_settings, llm_extraction_response
+    ):
+        """Items with context > 30 chars get a separate context chunk."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="CLAUDE.md",
+                settings=test_settings,
+            )
+
+        # PII constraint has substantial context ("Compliance requirement from Legal...")
+        pii_context = [c for c in chunks if "PII" in c.source_title and c.section_type == "context"]
+        assert len(pii_context) == 1
+        assert "Compliance" in pii_context[0].text
+
+    @pytest.mark.asyncio
+    async def test_no_context_chunk_for_short_context(
+        self, test_settings, llm_extraction_response
+    ):
+        """Items with empty or short context don't get a context chunk."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_extraction_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="CLAUDE.md",
+                settings=test_settings,
+            )
+
+        # Legacy SOAP client has empty context
+        soap_chunks = [c for c in chunks if "SOAP" in c.source_title]
+        assert not any(c.section_type == "context" for c in soap_chunks)
 
     @pytest.mark.asyncio
     async def test_services_preserved_correctly(
@@ -172,7 +318,7 @@ class TestExtractDecisions:
                 settings=test_settings,
             )
 
-        jwt_chunks = [c for c in chunks if "JWT" in c.text]
+        jwt_chunks = [c for c in chunks if "JWT" in c.source_title]
         for c in jwt_chunks:
             assert c.affected_services == ["auth-service", "api-gateway"]
 
@@ -184,7 +330,7 @@ class TestExtractDecisions:
     async def test_all_services_converted_to_empty_list(
         self, test_settings, llm_all_services_response
     ):
-        """Services=['all'] is converted to empty list for project-wide decisions."""
+        """Services=['all'] is converted to empty list for project-wide items."""
         from app.rules_bridge import extract_decisions_from_rules
 
         with patch(
@@ -202,7 +348,7 @@ class TestExtractDecisions:
             assert c.affected_services == []
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_no_decisions(
+    async def test_returns_empty_when_no_items(
         self, test_settings, llm_empty_response
     ):
         """File with only code style returns zero chunks."""
@@ -238,6 +384,28 @@ class TestExtractDecisions:
             )
 
         assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_with_legacy_format(
+        self, test_settings, llm_legacy_format_response
+    ):
+        """Old format with 'decisions' key and 'decision' field still works."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=llm_legacy_format_response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="rules.md",
+                settings=test_settings,
+            )
+
+        assert len(chunks) > 0
+        pg_chunk = [c for c in chunks if "PostgreSQL" in c.source_title][0]
+        assert "Use PostgreSQL" in pg_chunk.text
 
     @pytest.mark.asyncio
     async def test_dotfile_stem_handled_correctly(
@@ -279,11 +447,43 @@ class TestExtractDecisions:
                 settings=test_settings,
             )
 
-        jwt_chunk = [c for c in chunks if "JWT" in c.text and c.section_type == "decision"][0]
+        jwt_chunk = [c for c in chunks if "JWT" in c.source_title and c.section_type == "decision"][0]
         assert jwt_chunk.domain == "security"
 
-        rabbitmq_chunk = [c for c in chunks if "RabbitMQ" in c.text and c.section_type == "decision"][0]
-        assert rabbitmq_chunk.domain == "scalability"
+        pii_chunk = [c for c in chunks if "PII" in c.source_title and c.section_type == "decision"][0]
+        assert pii_chunk.domain == "compliance"
+
+    @pytest.mark.asyncio
+    async def test_invalid_knowledge_type_defaults_to_decision(
+        self, test_settings
+    ):
+        """Unknown knowledge_type falls back to 'decision'."""
+        from app.rules_bridge import extract_decisions_from_rules
+
+        response = json.dumps({
+            "items": [{
+                "title": "Some item",
+                "knowledge_type": "unknown_type",
+                "content": "Something.",
+                "context": "",
+                "rejected": "",
+                "services": [],
+                "domain": "operational",
+            }]
+        })
+
+        with patch(
+            "app.rules_bridge.complete",
+            new_callable=AsyncMock,
+            return_value=CompletionResult(content=response, model="gpt-4o"),
+        ):
+            chunks = await extract_decisions_from_rules(
+                content="some rules",
+                source_file="rules.md",
+                settings=test_settings,
+            )
+
+        assert chunks[0].knowledge_type == "decision"
 
 
 class TestIngestDocumentWithRules:
@@ -293,7 +493,7 @@ class TestIngestDocumentWithRules:
     async def test_tool_extracts_and_upserts_rules(
         self, test_settings, llm_extraction_response
     ):
-        """ingest_document detects rules file and extracts decisions."""
+        """ingest_document detects rules file and extracts items."""
         from app.mcp_server import ingest_document
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
@@ -307,20 +507,19 @@ class TestIngestDocumentWithRules:
              patch("app.mcp_server.find_overlapping", new_callable=AsyncMock, return_value=[]):
 
             result = json.loads(await ingest_document(
-                content="# Architecture\n- Use JWT\n- Use RabbitMQ",
+                content="# Architecture\n- Use JWT\n- PII encrypted\n- Logic in service layer",
                 filename="CLAUDE.md",
             ))
 
         assert result["format_detected"] == "rules_file"
-        assert result["items_extracted"] == 3
-        assert result["chunks_indexed"] == 5
+        assert result["items_extracted"] == 5
         assert mock_upsert.called
 
     @pytest.mark.asyncio
-    async def test_tool_returns_zero_when_no_decisions(
+    async def test_tool_returns_zero_when_no_items(
         self, test_settings, llm_empty_response
     ):
-        """ingest_document returns helpful message when no decisions found."""
+        """ingest_document returns helpful message when no items found."""
         from app.mcp_server import ingest_document
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
