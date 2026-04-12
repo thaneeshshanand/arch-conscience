@@ -211,19 +211,39 @@ class TestGetArchitecturalContext:
 
     @pytest.mark.asyncio
     async def test_no_chunks_returns_empty_message(self, test_settings):
-        """Empty corpus returns helpful guidance message."""
+        """Empty corpus returns helpful guidance message with known services."""
         from app.mcp_server import get_architectural_context
 
         with patch("app.mcp_server.get_settings", return_value=test_settings), \
              patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
              patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
-             patch("app.mcp_server.stats", new_callable=AsyncMock, return_value={"total_chunks": 0}):
+             patch("app.mcp_server.stats", new_callable=AsyncMock, return_value={"total_chunks": 0}), \
+             patch("app.mcp_server._known_services", new_callable=AsyncMock, return_value=[]):
 
             result = json.loads(await get_architectural_context(service="payments-service"))
 
         assert result["decisions_found"] == 0
-        assert "payments-service" in result["message"]
-        assert result["corpus_stats"]["total_chunks"] == 0
+        assert result["known_services"] == []
+        assert "corpus is empty" in result["message"]
+    
+    @pytest.mark.asyncio
+    async def test_no_chunks_suggests_known_services(self, test_settings):
+        """When service doesn't match, response lists known service names."""
+        from app.mcp_server import get_architectural_context
+
+        with patch("app.mcp_server.get_settings", return_value=test_settings), \
+             patch("app.mcp_server.ensure_collection", new_callable=AsyncMock), \
+             patch("app.mcp_server.query", new_callable=AsyncMock, return_value=[]), \
+             patch("app.mcp_server.stats", new_callable=AsyncMock, return_value={"total_chunks": 34}), \
+             patch("app.mcp_server._known_services", new_callable=AsyncMock, return_value=["backend", "frontend"]):
+
+            result = json.loads(await get_architectural_context(service="conduit-app"))
+
+        assert result["decisions_found"] == 0
+        assert result["known_services"] == ["backend", "frontend"]
+        assert "backend" in result["message"]
+        assert "frontend" in result["message"]
+        assert "Try re-querying" in result["message"]
 
     @pytest.mark.asyncio
     async def test_review_recommended_when_no_rejected_alt(self, decision_only_chunks, test_settings):

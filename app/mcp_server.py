@@ -29,8 +29,14 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from qdrant_client.http.models import (
+    FieldCondition,
+    Filter,
+    MatchValue,
+)
+
 from app.config import get_settings
-from app.corpus import ensure_collection, find_overlapping, query, stats, update_payload, upsert
+from app.corpus import ensure_collection, find_overlapping, query, stats, update_payload, upsert, _get_client
 from app.adr_drafter import draft_adr as _draft_adr
 from app.format_detect import DocumentFormat, detect_format
 from app.extract import extract_from_document
@@ -61,6 +67,9 @@ mcp = FastMCP(
         "To resolve conflicts or update item status, call update_item_status."
     ),
 )
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
 
 
 def _format_chunk(chunk, score: float) -> dict[str, Any]:
@@ -122,6 +131,32 @@ def _analyze_conflicts(chunks) -> dict[str, Any]:
     }
 
 
+async def _known_services(settings) -> list[str]:
+    """Return distinct service names from the corpus."""
+    print(">>> _known_services called", flush=True)
+    client = _get_client(settings)
+
+    response = await client.scroll(
+        collection_name=settings.QDRANT_COLLECTION,
+        scroll_filter=Filter(
+            must=[FieldCondition(key="status", match=MatchValue(value="active"))],
+        ),
+        limit=200,
+        with_payload=["affected_services"],
+    )
+
+    services: set[str] = set()
+    for point in response[0]:
+        for svc in (point.payload or {}).get("affected_services", []):
+            if svc:
+                services.add(svc)
+
+    return sorted(services)
+
+
+# ── Tools ────────────────────────────────────────────────────────────
+
+
 @mcp.tool()
 async def get_architectural_context(
     service: str = "",
@@ -172,18 +207,36 @@ async def get_architectural_context(
     # ── No results ───────────────────────────────────────────────────
     if not chunks:
         corpus_stats = await stats(settings)
+        known = await _known_services(settings)
+
+        message = (
+            f"No architectural decisions found"
+            + (f" for '{service}'" if service else "")
+            + "."
+        )
+
+        if service and known:
+            message += (
+                f" Known services in the corpus: {', '.join(known)}."
+                " Try re-querying with one of these service names."
+            )
+        elif not known:
+            message += (
+                " The corpus is empty. Ingest architectural documents first."
+            )
+        else:
+            message += (
+                " Proceed with caution and consider documenting any significant "
+                "architectural choices you make."
+            )
+
         return json.dumps({
             "service": service or "all",
             "approach": approach or None,
             "decisions_found": 0,
+            "known_services": known,
             "corpus_stats": corpus_stats,
-            "message": (
-                f"No architectural decisions found"
-                + (f" for '{service}'" if service else "")
-                + ". This may mean decisions exist but aren't documented yet. "
-                "Proceed with caution and consider documenting any significant "
-                "architectural choices you make."
-            ),
+            "message": message,
         }, indent=2)
 
     # ── Format results ───────────────────────────────────────────────
