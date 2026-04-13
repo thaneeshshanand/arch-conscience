@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     CONFLUENCE_BASE_URL: str = Field(
         default="", description="Confluence instance URL (e.g. https://yourorg.atlassian.net)"
     )
+    CONFLUENCE_USER_EMAIL: str = Field(
+        default="", description="Atlassian account email for Confluence API auth"
+    )
     CONFLUENCE_TOKEN: str = Field(default="", description="Atlassian API token")
     CONFLUENCE_SPACE_KEY: str = Field(
         default="", description="Confluence space key to ingest from"
@@ -59,6 +62,9 @@ class Settings(BaseSettings):
     # ── Jira (optional) ──────────────────────────────────────────────
     JIRA_BASE_URL: str = Field(
         default="", description="Jira instance URL (e.g. https://yourorg.atlassian.net)"
+    )
+    JIRA_USER_EMAIL: str = Field(
+        default="", description="Atlassian account email for Jira API auth"
     )
     JIRA_TOKEN: str = Field(default="", description="Atlassian API token for Jira")
 

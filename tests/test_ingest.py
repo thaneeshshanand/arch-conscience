@@ -30,6 +30,7 @@ def confluence_settings(test_settings):
         GITHUB_WEBHOOK_SECRET="secret",
         QDRANT_URL="http://localhost:6333",
         CONFLUENCE_BASE_URL="https://myorg.atlassian.net",
+        CONFLUENCE_USER_EMAIL="test@example.com",
         CONFLUENCE_TOKEN="cf-token-test",
         CONFLUENCE_SPACE_KEY="ENG",
         STAGE2_MODEL="gpt-4o",
@@ -45,6 +46,7 @@ def jira_settings(test_settings):
         GITHUB_WEBHOOK_SECRET="secret",
         QDRANT_URL="http://localhost:6333",
         JIRA_BASE_URL="https://myorg.atlassian.net",
+        JIRA_USER_EMAIL="test@example.com",
         JIRA_TOKEN="jira-token-test",
         STAGE2_MODEL="gpt-4o",
     )

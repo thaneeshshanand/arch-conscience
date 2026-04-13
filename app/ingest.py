@@ -265,8 +265,8 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             url,
+            auth=(settings.CONFLUENCE_USER_EMAIL, settings.CONFLUENCE_TOKEN),
             headers={
-                "Authorization": f"Bearer {settings.CONFLUENCE_TOKEN}",
                 "Accept": "application/json",
             },
         )
@@ -345,8 +345,8 @@ async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             url,
+            auth=(settings.JIRA_USER_EMAIL, settings.JIRA_TOKEN),
             headers={
-                "Authorization": f"Bearer {settings.JIRA_TOKEN}",
                 "Accept": "application/json",
             },
         )
