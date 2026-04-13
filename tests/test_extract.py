@@ -303,6 +303,51 @@ class TestBuildChunks:
             assert c.ingested_at != ""
             assert c.source_type == "confluence"
 
+    def test_author_used_when_provided(self):
+        """Explicit author overrides filename fallback."""
+        item = DiscoveredItem(title="X", knowledge_type="decision", summary="S")
+        parsed = {
+            "context": "", "decision": "Do X.", "consequences": "",
+            "rejected_alternatives": "", "affected_services": [], "domain": "operational",
+        }
+        chunks = _build_chunks_from_extraction(
+            parsed=parsed, item=item, filename="confluence-12345",
+            source_url="", source_type="confluence",
+            author="Alice Engineer", item_index=0,
+        )
+        assert chunks[0].author == "Alice Engineer"
+
+    def test_author_falls_back_to_filename(self):
+        """Empty author defaults to filename."""
+        item = DiscoveredItem(title="X", knowledge_type="decision", summary="S")
+        parsed = {
+            "context": "", "decision": "Do X.", "consequences": "",
+            "rejected_alternatives": "", "affected_services": [], "domain": "operational",
+        }
+        chunks = _build_chunks_from_extraction(
+            parsed=parsed, item=item, filename="design.md",
+            source_url="", source_type="", item_index=0,
+        )
+        assert chunks[0].author == "design.md"
+
+    def test_date_set_on_all_chunks(self):
+        """Date is propagated to every chunk."""
+        item = DiscoveredItem(title="X", knowledge_type="decision", summary="S",
+                              has_rejected_alternatives=True)
+        parsed = {
+            "context": "Why.", "decision": "What.", "consequences": "Tradeoffs.",
+            "rejected_alternatives": "Y rejected.",
+            "affected_services": [], "domain": "operational",
+        }
+        chunks = _build_chunks_from_extraction(
+            parsed=parsed, item=item, filename="doc.md",
+            source_url="", source_type="confluence",
+            date="2025-06-15", item_index=0,
+        )
+        assert len(chunks) == 4
+        for c in chunks:
+            assert c.date == "2025-06-15"
+
 
 class TestValidation:
     """Tests for _validate_extraction."""

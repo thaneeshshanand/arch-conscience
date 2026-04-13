@@ -62,6 +62,8 @@ async def extract_from_document(
     filename: str = "",
     source_url: str = "",
     source_type: str = "",
+    author: str = "",
+    date: str = "",
     settings: Settings | None = None,
 ) -> ExtractionResult:
     """Run the two-pass extraction pipeline on a document.
@@ -71,6 +73,10 @@ async def extract_from_document(
         filename: Filename for provenance.
         source_url: URL of the original document.
         source_type: Provenance label (e.g. "confluence", "rfc").
+        author: Document author (e.g. from Confluence page metadata).
+                Falls back to filename if empty.
+        date: Document date (e.g. page last modified). Used for
+              conflict resolution tie-breaking.
         settings: Optional settings override.
 
     Returns:
@@ -119,6 +125,8 @@ async def extract_from_document(
             filename=filename,
             source_url=source_url,
             source_type=source_type,
+            author=author,
+            date=date,
             item_index=i,
             settings=s,
         )
@@ -313,6 +321,8 @@ async def _pass2_extract(
     filename: str,
     source_url: str,
     source_type: str,
+    author: str = "",
+    date: str = "",
     item_index: int,
     settings: Settings,
     _retry: bool = True,
@@ -355,6 +365,8 @@ async def _pass2_extract(
         filename=filename,
         source_url=source_url,
         source_type=source_type,
+        author=author,
+        date=date,
         item_index=item_index,
     )
 
@@ -369,6 +381,8 @@ async def _pass2_extract(
             filename=filename,
             source_url=source_url,
             source_type=source_type,
+            author=author,
+            date=date,
             item_index=item_index,
             settings=settings,
             _retry=False,  # One retry only
@@ -424,6 +438,8 @@ def _build_chunks_from_extraction(
     filename: str,
     source_url: str,
     source_type: str,
+    author: str = "",
+    date: str = "",
     item_index: int,
 ) -> list[ChunkRecord]:
     """Build ChunkRecords from a Pass 2 extraction result."""
@@ -432,6 +448,9 @@ def _build_chunks_from_extraction(
 
     stem = filename.replace(".", "_").replace("/", "_") or "doc"
     doc_id = f"norm-{stem}-{item_index + 1}"
+
+    # Use passed author, fall back to filename
+    chunk_author = author or filename
 
     services = parsed.get("affected_services", [])
     if isinstance(services, str):
@@ -451,9 +470,10 @@ def _build_chunks_from_extraction(
             section_type="context",
             source_type=source_type or "design_doc",
             doc_id=doc_id,
-            author=filename,
+            author=chunk_author,
             affected_services=services,
             domain=domain,
+            date=date,
             source_url=source_url,
             source_title=item.title,
             ingested_at=now,
@@ -475,9 +495,10 @@ def _build_chunks_from_extraction(
             section_type="decision",
             source_type=source_type or "design_doc",
             doc_id=doc_id,
-            author=filename,
+            author=chunk_author,
             affected_services=services,
             domain=domain,
+            date=date,
             source_url=source_url,
             source_title=item.title,
             ingested_at=now,
@@ -493,9 +514,10 @@ def _build_chunks_from_extraction(
             section_type="consequences",
             source_type=source_type or "design_doc",
             doc_id=doc_id,
-            author=filename,
+            author=chunk_author,
             affected_services=services,
             domain=domain,
+            date=date,
             source_url=source_url,
             source_title=item.title,
             ingested_at=now,
@@ -511,9 +533,10 @@ def _build_chunks_from_extraction(
             section_type="rejected_alternatives",
             source_type=source_type or "design_doc",
             doc_id=doc_id,
-            author=filename,
+            author=chunk_author,
             affected_services=services,
             domain=domain,
+            date=date,
             source_url=source_url,
             source_title=item.title,
             ingested_at=now,

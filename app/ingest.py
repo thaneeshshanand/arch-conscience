@@ -1,8 +1,13 @@
 """Corpus ingestion — ADR files, Confluence pages, Jira epics.
 
-Each ADR section (Context, Decision, Consequences, Rejected Alternatives)
-becomes a separate corpus chunk so the retriever can surface the exact
-section most relevant to the incoming code change.
+ADR files are parsed deterministically via regex (no LLM call). Each
+section (Context, Decision, Consequences, Rejected Alternatives) becomes
+a separate corpus chunk.
+
+Confluence pages and Jira epics are routed through the two-pass LLM
+extraction pipeline (extract_from_document) for knowledge-type-aware
+chunking — decisions, constraints, and principles are extracted and
+classified the same way as any other document.
 
 Sources ingested (in order):
 1. Local ADR markdown files in /adrs
@@ -19,14 +24,11 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.corpus import ChunkRecord, ensure_collection, upsert
-from app.preprocess import preprocess as preprocess_content
+from app.extract import extract_from_document
 
 logger = logging.getLogger(__name__)
 
 _ADR_DIR = Path(__file__).resolve().parent.parent / "adrs"
-
-_CHUNK_MAX_CHARS = 1600
-_CHUNK_OVERLAP = 200
 
 
 @dataclass
@@ -243,7 +245,12 @@ def _extract_frontmatter(raw: str) -> tuple[dict, str]:
 
 
 async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
-    """Fetch Confluence pages labelled 'architecture-decision'."""
+    """Fetch Confluence pages labelled 'architecture-decision' and extract knowledge.
+
+    Routes each page through the two-pass extraction pipeline for
+    proper knowledge-type classification (decision/constraint/principle)
+    and section-level chunking.
+    """
     space_key = settings.CONFLUENCE_SPACE_KEY
     if not space_key:
         logger.info("CONFLUENCE_SPACE_KEY not set — skipping")
@@ -252,7 +259,7 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
     url = (
         f"{settings.CONFLUENCE_BASE_URL}/wiki/rest/api/content"
         f"?spaceKey={space_key}&label=architecture-decision"
-        f"&expand=body.storage&limit=50"
+        f"&expand=body.storage,version&limit=50"
     )
 
     async with httpx.AsyncClient() as client:
@@ -268,12 +275,11 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
         raise RuntimeError(f"Confluence API {resp.status_code}")
 
     data = resp.json()
-    chunks: list[ChunkRecord] = []
+    all_chunks: list[ChunkRecord] = []
 
     for page in data.get("results", []):
         html = page.get("body", {}).get("storage", {}).get("value", "")
-        text = preprocess_content(html)
-        if not text:
+        if not html.strip():
             continue
 
         page_id = page["id"]
@@ -284,30 +290,50 @@ async def _ingest_confluence(settings: Settings) -> list[ChunkRecord]:
         page_date = (
             page.get("version", {}).get("when", "")[:10]
         )
+        source_url = (
+            f"{settings.CONFLUENCE_BASE_URL}/wiki/pages/viewpage.action"
+            f"?pageId={page_id}"
+        )
 
-        for i, block in enumerate(_chunk_by_size(text)):
-            chunks.append(
-                ChunkRecord(
-                    id=f"confluence-{page_id}-{i}",
-                    text=f"Page: {page_title}\n\n{block}",
-                    knowledge_type="decision",
-                    source_type="confluence",
-                    doc_id=f"confluence-{page_id}",
-                    section_type="context",
-                    date=page_date,
-                    author=page_author,
-                    source_title=page_title,
-                )
+        logger.info("Extracting from Confluence page: %s (%s)", page_title, page_id)
+
+        result = await extract_from_document(
+            html,
+            filename=f"confluence-{page_id}-{page_title}",
+            source_url=source_url,
+            source_type="confluence",
+            author=page_author,
+            date=page_date,
+            settings=settings,
+        )
+
+        if not result.chunks:
+            logger.warning(
+                "No knowledge items extracted from Confluence page '%s' (%s). "
+                "The page has the 'architecture-decision' label but the extraction "
+                "pipeline found no decisions, constraints, or principles.",
+                page_title, page_id,
             )
+            continue
 
-    return chunks
+        all_chunks.extend(result.chunks)
+        logger.info(
+            "Confluence page '%s': %d items, %d chunks",
+            page_title, result.items_extracted, len(result.chunks),
+        )
+
+    return all_chunks
 
 
 # ── Jira ingestion ───────────────────────────────────────────────────
 
 
 async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
-    """Fetch Jira epics labelled 'arch-decision'."""
+    """Fetch Jira epics labelled 'arch-decision' and extract knowledge.
+
+    Routes each epic through the two-pass extraction pipeline for
+    proper knowledge-type classification and section-level chunking.
+    """
     jql = "issuetype = Epic AND labels = \"arch-decision\" ORDER BY created DESC"
 
     url = (
@@ -329,7 +355,7 @@ async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
         raise RuntimeError(f"Jira API {resp.status_code}")
 
     data = resp.json()
-    chunks: list[ChunkRecord] = []
+    all_chunks: list[ChunkRecord] = []
 
     for issue in data.get("issues", []):
         fields = issue.get("fields", {})
@@ -341,39 +367,40 @@ async def _ingest_jira(settings: Settings) -> list[ChunkRecord]:
         summary = fields.get("summary", "")
         assignee = (fields.get("assignee") or {}).get("displayName", "unknown")
         created = (fields.get("created") or "")[:10]
+        source_url = f"{settings.JIRA_BASE_URL}/browse/{issue_key}"
 
-        chunks.append(
-            ChunkRecord(
-                id=f"jira-{issue_key}",
-                text=f"Jira Epic: {summary}\n\n{description}",
-                knowledge_type="decision",
-                source_type="jira",
-                doc_id=issue_key,
-                section_type="decision",
-                date=created,
-                author=assignee,
-                source_title=summary,
-            )
+        # Prepend summary as title so the LLM has full context
+        content = f"# {summary}\n\n{description}"
+
+        logger.info("Extracting from Jira epic: %s (%s)", summary, issue_key)
+
+        result = await extract_from_document(
+            content,
+            filename=f"jira-{issue_key}",
+            source_url=source_url,
+            source_type="jira",
+            author=assignee,
+            date=created,
+            settings=settings,
         )
 
-    return chunks
+        if not result.chunks:
+            logger.warning(
+                "No knowledge items extracted from Jira epic '%s' (%s).",
+                summary, issue_key,
+            )
+            continue
+
+        all_chunks.extend(result.chunks)
+        logger.info(
+            "Jira epic '%s': %d items, %d chunks",
+            summary, result.items_extracted, len(result.chunks),
+        )
+
+    return all_chunks
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _chunk_by_size(
-    text: str,
-    max_chars: int = _CHUNK_MAX_CHARS,
-    overlap: int = _CHUNK_OVERLAP,
-) -> list[str]:
-    """Split text into overlapping chunks of roughly max_chars."""
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        chunks.append(text[start: start + max_chars])
-        start += max_chars - overlap
-    return chunks
 
 
 def _extract_jira_text(doc) -> str:
