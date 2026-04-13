@@ -494,7 +494,7 @@ Active:        ✅
 
 ## Testing
 
-112 automated tests across 8 test files:
+139 automated tests across 9 test files:
 
 ```bash
 # All tests
@@ -506,8 +506,9 @@ pytest tests/test_e2e.py -v            # pipeline + webhook + notifications (15 
 pytest tests/test_mcp.py -v            # MCP tools + format detection (24 tests)
 pytest tests/test_rules_bridge.py -v   # rules extraction (11 tests)
 pytest tests/test_preprocess.py -v     # HTML conversion + preprocessing (19 tests)
-pytest tests/test_extract.py -v        # two-pass extraction pipeline (16 tests)
+pytest tests/test_extract.py -v        # two-pass extraction pipeline (19 tests)
 pytest tests/test_notify.py -v         # Slack routing + dispatch (17 tests)
+pytest tests/test_ingest.py -v         # Confluence/Jira ingestion (15 tests)
 ```
 
 ### Manual simulation
@@ -573,7 +574,8 @@ arch-conscience/
 │   ├── test_rules_bridge.py     Rules file extraction
 │   ├── test_preprocess.py       HTML conversion + preprocessing
 │   ├── test_extract.py          Two-pass extraction pipeline
-│   └── test_notify.py           Slack routing + dispatch
+│   ├── test_notify.py           Slack routing + dispatch
+│   └── test_ingest.py           Confluence/Jira ingestion
 ├── pyproject.toml
 ├── requirements.txt
 ├── Procfile                     Railway: web: uvicorn app.main:app
@@ -616,14 +618,18 @@ The pipeline, confidence gate, section-level chunking, and query-time conflict r
 
 ## Confluence and Jira ingestion
 
-Confluence pages must carry the `architecture-decision` label and Jira epics must carry the `arch-decision` label to be picked up during ingestion. Add these to your `.env`:
+Confluence pages must carry the `architecture-decision` label and Jira epics must carry the `arch-decision` label to be picked up during ingestion. Each page is routed through the two-pass LLM extraction pipeline — the same one used for design docs and RFCs — so decisions, constraints, and principles are classified and chunked by section automatically.
+
+Uses HTTP Basic auth (Atlassian account email + API token). Create a token at [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
 
 ```bash
 CONFLUENCE_BASE_URL=https://yourorg.atlassian.net
+CONFLUENCE_USER_EMAIL=you@example.com
 CONFLUENCE_TOKEN=your_atlassian_api_token
 CONFLUENCE_SPACE_KEY=ENG          # space to scan
 
 JIRA_BASE_URL=https://yourorg.atlassian.net
+JIRA_USER_EMAIL=you@example.com
 JIRA_TOKEN=your_atlassian_api_token
 ```
 
@@ -633,7 +639,7 @@ Then run `python scripts/run_ingest.py` — it will pick up ADRs, Confluence pag
 
 ## Roadmap
 
-- **Validate Confluence ingestion** against a real instance
+- ~~**Validate Confluence ingestion**~~ ✓ Validated against real Confluence Cloud (3 pages, 13 items, 42 chunks)
 - **Notion integration** — ingest from Notion workspaces
 - **Large document splitting** — split on top-level headings for docs exceeding context window
 - **Auto-ingest** — re-ingest corpus when source documents change
