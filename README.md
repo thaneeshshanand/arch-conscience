@@ -503,8 +503,8 @@ pytest
 # By module
 pytest tests/test_smoke.py -v          # config + Qdrant connection (10 tests)
 pytest tests/test_e2e.py -v            # pipeline + webhook + notifications (15 tests)
-pytest tests/test_mcp.py -v            # MCP tools + format detection (24 tests)
-pytest tests/test_rules_bridge.py -v   # rules extraction (11 tests)
+pytest tests/test_mcp.py -v            # MCP tools + format detection (26 tests)
+pytest tests/test_rules_bridge.py -v   # rules extraction (18 tests)
 pytest tests/test_preprocess.py -v     # HTML conversion + preprocessing (19 tests)
 pytest tests/test_extract.py -v        # two-pass extraction pipeline (19 tests)
 pytest tests/test_notify.py -v         # Slack routing + dispatch (17 tests)
